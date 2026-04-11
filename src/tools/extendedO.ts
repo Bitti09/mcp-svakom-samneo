@@ -68,6 +68,94 @@ async function executeNeo2VacuumControl(
   throw new Error("All Neo2 vacuum control approaches failed");
 }
 
+async function runExtendedOOperation(
+  deviceState: DeviceState,
+  currentVibration: number,
+  currentVacuum: number,
+  holdDuration: number,
+  minimumLevel: number,
+  restoreDuration: number,
+): Promise<void> {
+  const device = deviceState.device;
+  const deviceVersion = deviceState.version;
+  if (!device || !deviceVersion) return;
+
+  console.error(
+    `[ExtendedO] Starting Extended O mode: currentVibration=${currentVibration}, currentVacuum=${currentVacuum}, holdDuration=${holdDuration}ms, minimumLevel=${minimumLevel}, device=${deviceVersion}`,
+  );
+
+  // Step 1: Immediately reduce both vibration and vacuum to minimum level
+  if (deviceVersion === SamNeoVersion.ORIGINAL) {
+    await device.vibrate([minimumLevel, minimumLevel]);
+    console.error(
+      `[ExtendedO] Original Sam Neo reduced to minimum: ${minimumLevel}`,
+    );
+  } else {
+    await device.scalar([
+      {
+        Index: 0,
+        Scalar: minimumLevel,
+        ActuatorType: ActuatorType.Vibrate,
+      },
+    ]);
+    await executeNeo2VacuumControl(device, minimumLevel);
+    console.error(`[ExtendedO] Neo2 Series reduced to minimum: ${minimumLevel}`);
+  }
+
+  // Step 2: Hold at minimum level for specified duration
+  console.error(`[ExtendedO] Holding at minimum level for ${holdDuration}ms`);
+  await new Promise((resolve) => setTimeout(resolve, holdDuration));
+
+  // Step 3: Restore to original intensity
+  if (restoreDuration === 0) {
+    if (deviceVersion === SamNeoVersion.ORIGINAL) {
+      await device.vibrate([currentVibration, currentVacuum]);
+    } else {
+      await device.scalar([
+        {
+          Index: 0,
+          Scalar: currentVibration,
+          ActuatorType: ActuatorType.Vibrate,
+        },
+      ]);
+      await executeNeo2VacuumControl(device, currentVacuum);
+    }
+    console.error(`[ExtendedO] Instantly restored to original levels`);
+  } else {
+    const steps = 10;
+    const stepDelay = restoreDuration / steps;
+    const vibrationStep = (currentVibration - minimumLevel) / steps;
+    const vacuumStep = (currentVacuum - minimumLevel) / steps;
+
+    for (let i = 1; i <= steps; i++) {
+      const vibrationLevel = minimumLevel + vibrationStep * i;
+      const vacuumLevel = minimumLevel + vacuumStep * i;
+
+      if (deviceVersion === SamNeoVersion.ORIGINAL) {
+        await device.vibrate([vibrationLevel, vacuumLevel]);
+      } else {
+        await device.scalar([
+          {
+            Index: 0,
+            Scalar: vibrationLevel,
+            ActuatorType: ActuatorType.Vibrate,
+          },
+        ]);
+        await executeNeo2VacuumControl(device, vacuumLevel);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, stepDelay));
+    }
+    console.error(
+      `[ExtendedO] Gradually restored to original levels over ${restoreDuration}ms`,
+    );
+  }
+
+  console.error(
+    `[ExtendedO] Extended O mode completed - device: ${deviceVersion}`,
+  );
+}
+
 export function createExtendedOTools(
   server: McpServer,
   deviceState: DeviceState,
@@ -119,122 +207,37 @@ export function createExtendedOTools(
       minimumLevel,
       restoreDuration,
     }) => {
-      try {
-        const device = deviceState.device;
-        const deviceVersion = deviceState.version;
-        if (!device || !deviceVersion) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
-              },
-            ],
-          };
-        }
-        console.error(
-          `[ExtendedO] Starting Extended O mode: currentVibration=${currentVibration}, currentVacuum=${currentVacuum}, holdDuration=${holdDuration}ms, minimumLevel=${minimumLevel}, device=${deviceVersion}`,
-        );
-
-        // Step 1: Immediately reduce both vibration and vacuum to minimum level
-        if (deviceVersion === SamNeoVersion.ORIGINAL) {
-          // Original Sam Neo: Use combined vibrate API
-          await device.vibrate([minimumLevel, minimumLevel]);
-          console.error(
-            `[ExtendedO] Original Sam Neo reduced to minimum: ${minimumLevel}`,
-          );
-        } else {
-          // Sam Neo 2 Series: Separate control
-          // Reduce vibration
-          await device.scalar([
-            {
-              Index: 0,
-              Scalar: minimumLevel,
-              ActuatorType: ActuatorType.Vibrate,
-            },
-          ]);
-
-          // Reduce vacuum
-          await executeNeo2VacuumControl(device, minimumLevel);
-          console.error(
-            `[ExtendedO] Neo2 Series reduced to minimum: ${minimumLevel}`,
-          );
-        }
-
-        // Step 2: Hold at minimum level for specified duration
-        console.error(
-          `[ExtendedO] Holding at minimum level for ${holdDuration}ms`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, holdDuration));
-
-        // Step 3: Restore to original intensity
-        if (restoreDuration === 0) {
-          // Instant restore
-          if (deviceVersion === SamNeoVersion.ORIGINAL) {
-            await device.vibrate([currentVibration, currentVacuum]);
-          } else {
-            await device.scalar([
-              {
-                Index: 0,
-                Scalar: currentVibration,
-                ActuatorType: ActuatorType.Vibrate,
-              },
-            ]);
-            await executeNeo2VacuumControl(device, currentVacuum);
-          }
-          console.error(`[ExtendedO] Instantly restored to original levels`);
-        } else {
-          // Gradual restore
-          const steps = 10;
-          const stepDelay = restoreDuration / steps;
-          const vibrationStep = (currentVibration - minimumLevel) / steps;
-          const vacuumStep = (currentVacuum - minimumLevel) / steps;
-
-          for (let i = 1; i <= steps; i++) {
-            const vibrationLevel = minimumLevel + vibrationStep * i;
-            const vacuumLevel = minimumLevel + vacuumStep * i;
-
-            if (deviceVersion === SamNeoVersion.ORIGINAL) {
-              await device.vibrate([vibrationLevel, vacuumLevel]);
-            } else {
-              await device.scalar([
-                {
-                  Index: 0,
-                  Scalar: vibrationLevel,
-                  ActuatorType: ActuatorType.Vibrate,
-                },
-              ]);
-              await executeNeo2VacuumControl(device, vacuumLevel);
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, stepDelay));
-          }
-          console.error(
-            `[ExtendedO] Gradually restored to original levels over ${restoreDuration}ms`,
-          );
-        }
-
-        console.error(
-          `[ExtendedO] Extended O mode completed - device: ${deviceVersion}`,
-        );
+      if (!deviceState.device || !deviceState.version) {
         return {
           content: [
             {
-              type: "text",
-              text: `Extended O completed - held at ${minimumLevel} for ${holdDuration}ms, restored to vibration: ${currentVibration}, vacuum: ${currentVacuum}, device: ${deviceVersion}`,
-            },
-          ],
-        };
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${e}`,
+              type: "text" as const,
+              text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
             },
           ],
         };
       }
+
+      // Run device operation in the background so the AI can continue immediately.
+      runExtendedOOperation(
+        deviceState,
+        currentVibration,
+        currentVacuum,
+        holdDuration,
+        minimumLevel,
+        restoreDuration,
+      ).catch((e) =>
+        console.error(`[ExtendedO] Background operation error: ${e}`),
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Extended O started in background - will hold at ${minimumLevel} for ${holdDuration}ms then restore to vibration: ${currentVibration}, vacuum: ${currentVacuum}, device: ${deviceState.version}`,
+          },
+        ],
+      };
     },
   );
 }

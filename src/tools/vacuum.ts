@@ -95,6 +95,65 @@ async function executeOriginalVacuumControl(
   }
 }
 
+async function runVacuumOperation(
+  deviceState: DeviceState,
+  intensity: number,
+  duration: number,
+  pattern: "constant" | "pulse" | "wave",
+  pulseInterval: number,
+): Promise<void> {
+  const device = deviceState.device;
+  const deviceVersion = deviceState.version;
+  if (!device || !deviceVersion) return;
+
+  console.error(
+    `[VacuumTool] Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}, device=${deviceVersion}`,
+  );
+
+  let successfulApproach = "";
+
+  // Select appropriate vacuum control function based on device version
+  const executeVacuumControl =
+    deviceVersion === SamNeoVersion.ORIGINAL
+      ? executeOriginalVacuumControl
+      : executeNeo2VacuumControl;
+
+  if (pattern === "constant") {
+    successfulApproach = await executeVacuumControl(device, intensity);
+    await new Promise((resolve) => setTimeout(resolve, duration));
+  } else if (pattern === "pulse") {
+    const cycles = Math.floor(duration / (pulseInterval * 2));
+    for (let i = 0; i < cycles; i++) {
+      successfulApproach = await executeVacuumControl(device, intensity);
+      await new Promise((resolve) => setTimeout(resolve, pulseInterval));
+      await executeVacuumControl(device, 0);
+      await new Promise((resolve) => setTimeout(resolve, pulseInterval));
+    }
+  } else if (pattern === "wave") {
+    const steps = 20;
+    const stepDuration = duration / (steps * 2);
+
+    for (let i = 0; i <= steps; i++) {
+      const currentIntensity = (i / steps) * intensity;
+      successfulApproach = await executeVacuumControl(device, currentIntensity);
+      await new Promise((resolve) => setTimeout(resolve, stepDuration));
+    }
+
+    for (let i = steps; i >= 0; i--) {
+      const currentIntensity = (i / steps) * intensity;
+      await executeVacuumControl(device, currentIntensity);
+      await new Promise((resolve) => setTimeout(resolve, stepDuration));
+    }
+  }
+
+  // Stop vacuum
+  await executeVacuumControl(device, 0);
+
+  console.error(
+    `[VacuumTool] Completed: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}, approach=${successfulApproach}, device=${deviceVersion}`,
+  );
+}
+
 export function createVacuumTools(server: McpServer, deviceState: DeviceState) {
   server.tool(
     "Svakom-Sam-Neo-Vacuum",
@@ -132,101 +191,40 @@ export function createVacuumTools(server: McpServer, deviceState: DeviceState) {
     },
 
     async ({ intensity, duration, pattern, pulseInterval = 500 }) => {
-      try {
-        const device = deviceState.device;
-        const deviceVersion = deviceState.version;
-        if (!device || !deviceVersion) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
-              },
-            ],
-          };
-        }
-        console.error(
-          `[VacuumTool] Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}, device=${deviceVersion}`,
-        );
-
-        let successfulApproach = "";
-
-        // Select appropriate vacuum control function based on device version
-        const executeVacuumControl =
-          deviceVersion === SamNeoVersion.ORIGINAL
-            ? executeOriginalVacuumControl
-            : executeNeo2VacuumControl;
-
-        if (pattern === "constant") {
-          // Constant vacuum
-          successfulApproach = await executeVacuumControl(device, intensity);
-          await new Promise((resolve) => setTimeout(resolve, duration));
-        } else if (pattern === "pulse") {
-          // Pulsing vacuum
-          const cycles = Math.floor(duration / (pulseInterval * 2));
-          for (let i = 0; i < cycles; i++) {
-            // On
-            successfulApproach = await executeVacuumControl(device, intensity);
-            await new Promise((resolve) => setTimeout(resolve, pulseInterval));
-
-            // Off
-            await executeVacuumControl(device, 0);
-            await new Promise((resolve) => setTimeout(resolve, pulseInterval));
-          }
-        } else if (pattern === "wave") {
-          // Wave pattern - gradual increase and decrease
-          const steps = 20;
-          const stepDuration = duration / (steps * 2);
-
-          // Increase
-          for (let i = 0; i <= steps; i++) {
-            const currentIntensity = (i / steps) * intensity;
-            successfulApproach = await executeVacuumControl(
-              device,
-              currentIntensity,
-            );
-            await new Promise((resolve) => setTimeout(resolve, stepDuration));
-          }
-
-          // Decrease
-          for (let i = steps; i >= 0; i--) {
-            const currentIntensity = (i / steps) * intensity;
-            await executeVacuumControl(device, currentIntensity);
-            await new Promise((resolve) => setTimeout(resolve, stepDuration));
-          }
-        }
-
-        // Stop vacuum
-        await executeVacuumControl(device, 0);
-
-        console.error(
-          `[VacuumTool] Completed: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}, approach=${successfulApproach}, device=${deviceVersion}`,
-        );
+      if (!deviceState.device || !deviceState.version) {
         return {
           content: [
             {
-              type: "text",
-              text: `Vacuum operation completed - intensity: ${intensity}, duration: ${duration}ms, pattern: ${pattern}, method: ${successfulApproach}, device: ${deviceVersion}`,
-            },
-          ],
-        };
-      } catch (e) {
-        // Log detailed error information for debugging
-        console.error(`[VacuumTool] Final error details:`, e);
-        console.error(
-          `[VacuumTool] Device capabilities were:`,
-          JSON.stringify(deviceState.device?.messageAttributes),
-        );
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Vacuum control failed. Device capabilities: ${JSON.stringify(deviceState.device?.messageAttributes)}. Error: ${e}`,
+              type: "text" as const,
+              text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
             },
           ],
         };
       }
+
+      // Run device operation in the background so the AI can continue immediately.
+      runVacuumOperation(
+        deviceState,
+        intensity,
+        duration,
+        pattern,
+        pulseInterval,
+      ).catch((e) => {
+        console.error(`[VacuumTool] Background operation error: ${e}`);
+        console.error(
+          `[VacuumTool] Device capabilities were:`,
+          JSON.stringify(deviceState.device?.messageAttributes),
+        );
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Vacuum operation started in background - intensity: ${intensity}, duration: ${duration}ms, pattern: ${pattern}, device: ${deviceState.version}`,
+          },
+        ],
+      };
     },
   );
 }

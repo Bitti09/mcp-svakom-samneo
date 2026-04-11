@@ -85,6 +85,158 @@ async function executeOriginalComboControl(
   }
 }
 
+async function runComboOperation(
+  deviceState: DeviceState,
+  duration: number,
+  steps: number,
+  vibrationPower: number,
+  vacuumIntensity: number,
+  syncMode: "synchronized" | "alternating" | "independent",
+  vacuumPattern: "constant" | "pulse" | "wave",
+): Promise<void> {
+  const device = deviceState.device;
+  const deviceVersion = deviceState.version;
+  if (!device || !deviceVersion) return;
+
+  console.error(
+    `[ComboTool] Starting combo: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, vacuumIntensity=${vacuumIntensity}, syncMode=${syncMode}, device=${deviceVersion}`,
+  );
+
+  const diff = 1 / steps;
+  const delay = duration / steps;
+
+  if (syncMode === "synchronized") {
+    for (let i = 0; i < steps; i++) {
+      const intensity = diff * i;
+
+      if (deviceVersion === SamNeoVersion.ORIGINAL) {
+        await executeOriginalComboControl(
+          device,
+          intensity * vibrationPower,
+          intensity * vacuumIntensity,
+        );
+      } else {
+        await device.scalar([
+          {
+            Index: 0,
+            Scalar: intensity * vibrationPower,
+            ActuatorType: ActuatorType.Vibrate,
+          },
+        ]);
+        await executeNeo2ComboVacuumControl(device, intensity * vacuumIntensity);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  } else if (syncMode === "alternating") {
+    for (let i = 0; i < steps; i++) {
+      const intensity = diff * i;
+      const vibrationLevel = intensity * vibrationPower;
+      const vacuumLevel = (1 - intensity) * vacuumIntensity;
+
+      if (deviceVersion === SamNeoVersion.ORIGINAL) {
+        await executeOriginalComboControl(device, vibrationLevel, vacuumLevel);
+      } else {
+        await device.scalar([
+          {
+            Index: 0,
+            Scalar: vibrationLevel,
+            ActuatorType: ActuatorType.Vibrate,
+          },
+        ]);
+        await executeNeo2ComboVacuumControl(device, vacuumLevel);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  } else if (syncMode === "independent") {
+    if (deviceVersion === SamNeoVersion.ORIGINAL) {
+      console.error(
+        `[ComboTool] Warning: Original Sam Neo doesn't support independent mode, using synchronized instead`,
+      );
+      for (let i = 0; i < steps; i++) {
+        const intensity = diff * i;
+        const currentVacuum =
+          vacuumPattern === "wave"
+            ? Math.sin((i / steps) * Math.PI) * vacuumIntensity
+            : vacuumIntensity;
+
+        await executeOriginalComboControl(
+          device,
+          intensity * vibrationPower,
+          currentVacuum,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    } else {
+      const vibrationPromise = (async () => {
+        for (let i = 0; i < steps; i++) {
+          const intensity = diff * i;
+          await device.scalar([
+            {
+              Index: 0,
+              Scalar: intensity * vibrationPower,
+              ActuatorType: ActuatorType.Vibrate,
+            },
+          ]);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      })();
+
+      const vacuumPromise = (async () => {
+        if (vacuumPattern === "constant") {
+          await executeNeo2ComboVacuumControl(device, vacuumIntensity);
+          await new Promise((resolve) => setTimeout(resolve, duration));
+        } else if (vacuumPattern === "pulse") {
+          const pulseInterval = 500;
+          const cycles = Math.floor(duration / (pulseInterval * 2));
+          for (let i = 0; i < cycles; i++) {
+            await executeNeo2ComboVacuumControl(device, vacuumIntensity);
+            await new Promise((resolve) => setTimeout(resolve, pulseInterval));
+            await executeNeo2ComboVacuumControl(device, 0);
+            await new Promise((resolve) => setTimeout(resolve, pulseInterval));
+          }
+        } else if (vacuumPattern === "wave") {
+          const waveSteps = 20;
+          const stepDuration = duration / (waveSteps * 2);
+
+          for (let i = 0; i <= waveSteps; i++) {
+            const currentIntensity = (i / waveSteps) * vacuumIntensity;
+            await executeNeo2ComboVacuumControl(device, currentIntensity);
+            await new Promise((resolve) => setTimeout(resolve, stepDuration));
+          }
+
+          for (let i = waveSteps; i >= 0; i--) {
+            const currentIntensity = (i / waveSteps) * vacuumIntensity;
+            await executeNeo2ComboVacuumControl(device, currentIntensity);
+            await new Promise((resolve) => setTimeout(resolve, stepDuration));
+          }
+        }
+      })();
+
+      await Promise.all([vibrationPromise, vacuumPromise]);
+    }
+  }
+
+  // Stop both actuators
+  if (deviceVersion === SamNeoVersion.ORIGINAL) {
+    await device.vibrate([0, 0]);
+  } else {
+    await device.scalar([
+      {
+        Index: 0,
+        Scalar: 0,
+        ActuatorType: ActuatorType.Vibrate,
+      },
+    ]);
+    await executeNeo2ComboVacuumControl(device, 0);
+  }
+
+  console.error(
+    `[ComboTool] Completed: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, vacuumIntensity=${vacuumIntensity}, syncMode=${syncMode}, device=${deviceVersion}`,
+  );
+}
+
 export function createComboTools(server: McpServer, deviceState: DeviceState) {
   server.tool(
     "Svakom-Sam-Neo-Combo",
@@ -135,207 +287,38 @@ export function createComboTools(server: McpServer, deviceState: DeviceState) {
       syncMode,
       vacuumPattern,
     }) => {
-      try {
-        const device = deviceState.device;
-        const deviceVersion = deviceState.version;
-        if (!device || !deviceVersion) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
-              },
-            ],
-          };
-        }
-        console.error(
-          `[ComboTool] Starting combo: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, vacuumIntensity=${vacuumIntensity}, syncMode=${syncMode}, device=${deviceVersion}`,
-        );
-
-        const diff = 1 / steps;
-        const delay = duration / steps;
-
-        if (syncMode === "synchronized") {
-          // Both vibration and vacuum follow the same stepping pattern
-          for (let i = 0; i < steps; i++) {
-            const intensity = diff * i;
-
-            if (deviceVersion === SamNeoVersion.ORIGINAL) {
-              // Original Sam Neo: Use combined vibrate API
-              await executeOriginalComboControl(
-                device,
-                intensity * vibrationPower,
-                intensity * vacuumIntensity,
-              );
-            } else {
-              // Sam Neo 2 Series (Neo2/Neo2 Pro): Separate control
-              await device.scalar([
-                {
-                  Index: 0,
-                  Scalar: intensity * vibrationPower,
-                  ActuatorType: ActuatorType.Vibrate,
-                },
-              ]);
-
-              await executeNeo2ComboVacuumControl(
-                device,
-                intensity * vacuumIntensity,
-              );
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          }
-        } else if (syncMode === "alternating") {
-          // Vibration and vacuum alternate - when one is high, the other is low
-          for (let i = 0; i < steps; i++) {
-            const intensity = diff * i;
-            const vibrationLevel = intensity * vibrationPower;
-            const vacuumLevel = (1 - intensity) * vacuumIntensity; // Opposite pattern
-
-            if (deviceVersion === SamNeoVersion.ORIGINAL) {
-              // Original Sam Neo: Use combined vibrate API with alternating pattern
-              await executeOriginalComboControl(
-                device,
-                vibrationLevel,
-                vacuumLevel,
-              );
-            } else {
-              // Sam Neo 2 Series (Neo2/Neo2 Pro): Separate control with alternating pattern
-              await device.scalar([
-                {
-                  Index: 0,
-                  Scalar: vibrationLevel,
-                  ActuatorType: ActuatorType.Vibrate,
-                },
-              ]);
-
-              await executeNeo2ComboVacuumControl(device, vacuumLevel);
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          }
-        } else if (syncMode === "independent") {
-          if (deviceVersion === SamNeoVersion.ORIGINAL) {
-            // Original Sam Neo: Cannot truly run independent patterns simultaneously
-            // Fall back to synchronized mode with a warning
-            console.error(
-              `[ComboTool] Warning: Original Sam Neo doesn't support independent mode, using synchronized instead`,
-            );
-            for (let i = 0; i < steps; i++) {
-              const intensity = diff * i;
-              const currentVacuum =
-                vacuumPattern === "wave"
-                  ? Math.sin((i / steps) * Math.PI) * vacuumIntensity
-                  : vacuumIntensity;
-
-              await executeOriginalComboControl(
-                device,
-                intensity * vibrationPower,
-                currentVacuum,
-              );
-              await new Promise((resolve) => setTimeout(resolve, delay));
-            }
-          } else {
-            // Sam Neo 2 Series (Neo2/Neo2 Pro): Run vibration stepping and vacuum pattern independently and simultaneously
-            const vibrationPromise = (async () => {
-              for (let i = 0; i < steps; i++) {
-                const intensity = diff * i;
-                await device.scalar([
-                  {
-                    Index: 0,
-                    Scalar: intensity * vibrationPower,
-                    ActuatorType: ActuatorType.Vibrate,
-                  },
-                ]);
-                await new Promise((resolve) => setTimeout(resolve, delay));
-              }
-            })();
-
-            const vacuumPromise = (async () => {
-              if (vacuumPattern === "constant") {
-                await executeNeo2ComboVacuumControl(device, vacuumIntensity);
-                await new Promise((resolve) => setTimeout(resolve, duration));
-              } else if (vacuumPattern === "pulse") {
-                const pulseInterval = 500; // Fixed pulse interval for combo mode
-                const cycles = Math.floor(duration / (pulseInterval * 2));
-                for (let i = 0; i < cycles; i++) {
-                  await executeNeo2ComboVacuumControl(device, vacuumIntensity);
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, pulseInterval),
-                  );
-
-                  await executeNeo2ComboVacuumControl(device, 0);
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, pulseInterval),
-                  );
-                }
-              } else if (vacuumPattern === "wave") {
-                const waveSteps = 20;
-                const stepDuration = duration / (waveSteps * 2);
-
-                // Increase
-                for (let i = 0; i <= waveSteps; i++) {
-                  const currentIntensity = (i / waveSteps) * vacuumIntensity;
-                  await executeNeo2ComboVacuumControl(device, currentIntensity);
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, stepDuration),
-                  );
-                }
-
-                // Decrease
-                for (let i = waveSteps; i >= 0; i--) {
-                  const currentIntensity = (i / waveSteps) * vacuumIntensity;
-                  await executeNeo2ComboVacuumControl(device, currentIntensity);
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, stepDuration),
-                  );
-                }
-              }
-            })();
-
-            // Wait for both patterns to complete
-            await Promise.all([vibrationPromise, vacuumPromise]);
-          }
-        }
-
-        // Stop both actuators
-        if (deviceVersion === SamNeoVersion.ORIGINAL) {
-          // Original Sam Neo: Stop both vibrators
-          await device.vibrate([0, 0]);
-        } else {
-          // Sam Neo 2 Series (Neo2/Neo2 Pro): Stop vibration and vacuum separately
-          await device.scalar([
-            {
-              Index: 0,
-              Scalar: 0,
-              ActuatorType: ActuatorType.Vibrate,
-            },
-          ]);
-
-          await executeNeo2ComboVacuumControl(device, 0);
-        }
-
-        console.error(
-          `[ComboTool] Completed: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, vacuumIntensity=${vacuumIntensity}, syncMode=${syncMode}, device=${deviceVersion}`,
-        );
+      if (!deviceState.device || !deviceState.version) {
         return {
           content: [
             {
-              type: "text",
-              text: `Combo stimulation completed - duration: ${duration}ms, steps: ${steps}, vibration: ${vibrationPower}, vacuum: ${vacuumIntensity}, mode: ${syncMode}, device: ${deviceVersion}`,
-            },
-          ],
-        };
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${e}`,
+              type: "text" as const,
+              text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
             },
           ],
         };
       }
+
+      // Run device operation in the background so the AI can continue immediately.
+      runComboOperation(
+        deviceState,
+        duration,
+        steps,
+        vibrationPower,
+        vacuumIntensity,
+        syncMode,
+        vacuumPattern,
+      ).catch((e) =>
+        console.error(`[ComboTool] Background operation error: ${e}`),
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Combo stimulation started in background - duration: ${duration}ms, steps: ${steps}, vibration: ${vibrationPower}, vacuum: ${vacuumIntensity}, mode: ${syncMode}, device: ${deviceState.version}`,
+          },
+        ],
+      };
     },
   );
 }
