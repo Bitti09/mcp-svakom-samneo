@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type ButtplugClientDevice, ActuatorType } from "buttplug";
-import { SamNeoVersion } from "../main.js";
+import { SamNeoVersion, type DeviceState } from "../main.js";
 
 // Helper function for Sam Neo 2 Pro vacuum control in combo mode
 async function executeNeo2ComboVacuumControl(
@@ -85,11 +85,7 @@ async function executeOriginalComboControl(
   }
 }
 
-export function createComboTools(
-  server: McpServer,
-  device: ButtplugClientDevice,
-  deviceVersion: SamNeoVersion,
-) {
+export function createComboTools(server: McpServer, deviceState: DeviceState) {
   server.tool(
     "Svakom-Sam-Neo-Combo",
     "A tool for simultaneous control of both vibration and vacuum/suction functionality of the Svakom Sam Neo. This tool allows precise coordination of both stimulation types for enhanced experience.",
@@ -140,6 +136,18 @@ export function createComboTools(
       vacuumPattern,
     }) => {
       try {
+        const device = deviceState.device;
+        const deviceVersion = deviceState.version;
+        if (!device || !deviceVersion) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
+              },
+            ],
+          };
+        }
         console.error(
           `[ComboTool] Starting combo: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, vacuumIntensity=${vacuumIntensity}, syncMode=${syncMode}, device=${deviceVersion}`,
         );

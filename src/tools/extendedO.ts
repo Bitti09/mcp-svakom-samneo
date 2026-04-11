@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type ButtplugClientDevice, ActuatorType } from "buttplug";
-import { SamNeoVersion } from "../main.js";
+import { SamNeoVersion, type DeviceState } from "../main.js";
 
 // Helper function for Sam Neo 2 vacuum control (reused from vacuum.ts)
 async function executeNeo2VacuumControl(
@@ -70,8 +70,7 @@ async function executeNeo2VacuumControl(
 
 export function createExtendedOTools(
   server: McpServer,
-  device: ButtplugClientDevice,
-  deviceVersion: SamNeoVersion,
+  deviceState: DeviceState,
 ) {
   server.tool(
     "Svakom-Sam-Neo-ExtendedO",
@@ -121,6 +120,18 @@ export function createExtendedOTools(
       restoreDuration,
     }) => {
       try {
+        const device = deviceState.device;
+        const deviceVersion = deviceState.version;
+        if (!device || !deviceVersion) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
+              },
+            ],
+          };
+        }
         console.error(
           `[ExtendedO] Starting Extended O mode: currentVibration=${currentVibration}, currentVacuum=${currentVacuum}, holdDuration=${holdDuration}ms, minimumLevel=${minimumLevel}, device=${deviceVersion}`,
         );

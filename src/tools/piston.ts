@@ -1,13 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice, ActuatorType } from "buttplug";
-import { SamNeoVersion } from "../main.js";
+import { ActuatorType } from "buttplug";
+import { SamNeoVersion, type DeviceState } from "../main.js";
 
-export function createPistonTools(
-  server: McpServer,
-  device: ButtplugClientDevice,
-  deviceVersion: SamNeoVersion,
-) {
+export function createPistonTools(server: McpServer, deviceState: DeviceState) {
   server.tool(
     "Svakom-Sam-Neo-Piston",
     "A tool for operating the Svakom Sam Neo, a device that supports the Buttplug protocol. This tool allows the user to stimulate interactively. This tool allows the user to give piston motion.",
@@ -37,6 +33,18 @@ export function createPistonTools(
 
     async ({ duration, steps, vibrationPower }) => {
       try {
+        const device = deviceState.device;
+        const deviceVersion = deviceState.version;
+        if (!device || !deviceVersion) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
+              },
+            ],
+          };
+        }
         const diff = 1 / steps;
         const delay = duration / steps;
 

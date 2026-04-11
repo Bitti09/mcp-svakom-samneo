@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type ButtplugClientDevice, ActuatorType } from "buttplug";
-import { SamNeoVersion } from "../main.js";
+import { SamNeoVersion, type DeviceState } from "../main.js";
 
 // Helper function for Sam Neo 2 Pro vacuum control
 async function executeNeo2VacuumControl(
@@ -95,11 +95,7 @@ async function executeOriginalVacuumControl(
   }
 }
 
-export function createVacuumTools(
-  server: McpServer,
-  device: ButtplugClientDevice,
-  deviceVersion: SamNeoVersion,
-) {
+export function createVacuumTools(server: McpServer, deviceState: DeviceState) {
   server.tool(
     "Svakom-Sam-Neo-Vacuum",
     "A tool for controlling the vacuum/suction functionality of the Svakom Sam Neo. This tool allows precise control over the suction intensity and patterns for enhanced stimulation.",
@@ -137,6 +133,18 @@ export function createVacuumTools(
 
     async ({ intensity, duration, pattern, pulseInterval = 500 }) => {
       try {
+        const device = deviceState.device;
+        const deviceVersion = deviceState.version;
+        if (!device || !deviceVersion) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: No Sam Neo device is connected. Please ensure Intiface/Buttplug is running and your device is paired.",
+              },
+            ],
+          };
+        }
         console.error(
           `[VacuumTool] Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}, device=${deviceVersion}`,
         );
@@ -207,14 +215,14 @@ export function createVacuumTools(
         console.error(`[VacuumTool] Final error details:`, e);
         console.error(
           `[VacuumTool] Device capabilities were:`,
-          JSON.stringify(device.messageAttributes),
+          JSON.stringify(deviceState.device?.messageAttributes),
         );
 
         return {
           content: [
             {
               type: "text",
-              text: `Vacuum control failed. Device capabilities: ${JSON.stringify(device.messageAttributes)}. Error: ${e}`,
+              text: `Vacuum control failed. Device capabilities: ${JSON.stringify(deviceState.device?.messageAttributes)}. Error: ${e}`,
             },
           ],
         };

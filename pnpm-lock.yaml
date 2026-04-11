@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: '*'
+        specifier: ^1.24.0
         version: 1.24.0(zod@3.25.76)
       buttplug:
         specifier: ^3.2.2
