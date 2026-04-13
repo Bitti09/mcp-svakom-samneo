@@ -88,10 +88,10 @@ export function createVacuumTools(
         }
 
         const patternIntensity = entry.intensity ?? intensity;
-        validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
-        updateState(undefined, patternIntensity);
-
         try {
+          validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+          updateState(undefined, patternIntensity);
+
           const id = await engine.play(
             device.index,
             entry.tracks,

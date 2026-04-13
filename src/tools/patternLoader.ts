@@ -38,7 +38,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 export function createPatternLoaderTool(server: McpServer) {
   server.tool(
     "Svakom-Sam-Neo-LoadPattern",
-    `Fetches a custom pattern JSON from a URL, validates it against the JET schema ({ name, description, tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Returns the full updated list of available custom patterns on success.`,
+    `Fetches a custom pattern JSON from a URL, validates it against the JET schema ({ name, description, tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Accepts either a single pattern object or an array of pattern objects. Already-loaded names are skipped. Returns the full updated list of available custom patterns on success.`,
     {
       url: z.string().url().describe("HTTP(S) URL pointing to the custom pattern JSON file."),
     },
@@ -68,9 +68,15 @@ export function createPatternLoaderTool(server: McpServer) {
         };
       }
 
-      const result = PatternEntrySchema.safeParse(json);
-      if (!result.success) {
-        const errors = result.error.errors
+      // Accept either a single pattern object or an array of pattern objects.
+      const singleResult = PatternEntrySchema.safeParse(json);
+      const arrayResult = singleResult.success
+        ? null
+        : z.array(PatternEntrySchema).min(1).safeParse(json);
+
+      if (!singleResult.success && !arrayResult?.success) {
+        // Prefer the single-object error message as it is more actionable.
+        const errors = singleResult.error.errors
           .map((err) => `  - ${err.path.join(".") || "(root)"}: ${err.message}`)
           .join("\n");
         return {
@@ -79,30 +85,34 @@ export function createPatternLoaderTool(server: McpServer) {
         };
       }
 
-      const pattern = result.data;
+      const patterns = singleResult.success
+        ? [singleResult.data]
+        : arrayResult!.data!;
 
-      if (getPattern(pattern.name)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `A pattern named "${pattern.name}" is already loaded. Use a different name or restart the server to clear the registry.`,
-            },
-          ],
-          isError: true,
-        };
+      const loaded: string[] = [];
+      const skipped: string[] = [];
+
+      for (const pattern of patterns) {
+        if (getPattern(pattern.name)) {
+          skipped.push(pattern.name);
+        } else {
+          registerPattern(pattern);
+          debugLog("PatternLoader", `Registered custom pattern: ${pattern.name}`);
+          loaded.push(pattern.name);
+        }
       }
 
-      registerPattern(pattern);
-      debugLog("PatternLoader", `Registered custom pattern: ${pattern.name}`);
+      const lines: string[] = [];
+      if (loaded.length > 0) {
+        lines.push(`✅ Loaded ${loaded.length} pattern(s): ${loaded.map((n) => `"${n}"`).join(", ")}.`);
+      }
+      if (skipped.length > 0) {
+        lines.push(`⚠️ Skipped ${skipped.length} already-loaded pattern(s): ${skipped.map((n) => `"${n}"`).join(", ")}.`);
+      }
+      lines.push(`\nAvailable custom patterns:\n${formatPatternList()}`);
 
       return {
-        content: [
-          {
-            type: "text",
-            text: `✅ Custom pattern "${pattern.name}" loaded successfully.\n\nAvailable custom patterns:\n${formatPatternList()}`,
-          },
-        ],
+        content: [{ type: "text", text: lines.join("\n") }],
       };
     },
   );

@@ -104,11 +104,11 @@ export function createComboTools(
         }
 
         const patternIntensity = entry.intensity ?? Math.max(vibrationPower, vacuumIntensity);
-        validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
-        validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
-        updateState(patternIntensity, patternIntensity);
-
         try {
+          validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
+          validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+          updateState(patternIntensity, patternIntensity);
+
           const id = await engine.play(
             device.index,
             entry.tracks,

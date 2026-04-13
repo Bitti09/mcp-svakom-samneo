@@ -84,10 +84,10 @@ export function createPistonTools(
         }
 
         const patternIntensity = entry.intensity ?? vibrationPower;
-        validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
-        updateState(patternIntensity);
-
         try {
+          validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
+          updateState(patternIntensity);
+
           const id = await engine.play(
             device.index,
             entry.tracks,
