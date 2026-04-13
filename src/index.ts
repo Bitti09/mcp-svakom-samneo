@@ -20,7 +20,6 @@ import { createComboTools } from "./tools/combo.js";
 import { createExtendedOTools } from "./tools/extendedO.js";
 import { createInfoTools } from "./tools/info.js";
 import { createPatternLoaderTool } from "./tools/patternLoader.js";
-import { createPlayTool } from "./tools/play.js";
 
 import { CONFIG } from "./utils/config.js";
 import { debugLog, errorLog } from "./utils/logger.js";
@@ -130,7 +129,6 @@ async function main() {
     createExtendedOTools(server, device, deviceVersion);
     createInfoTools(server, device, deviceVersion);
     createPatternLoaderTool(server);
-    createPlayTool(server, device, deviceVersion);
 
     debugLog("Main", `✅ Connected: ${device.displayName ?? device.name} (${deviceVersion})`);
 
