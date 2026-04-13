@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type Device } from "@zendrex/buttplug.js";
+import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
   type SamNeoVersion,
   deviceState,
@@ -14,7 +14,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
-import { type Keyframe } from "@zendrex/buttplug.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Piston-like motion tool with the MCP server.
@@ -50,9 +50,15 @@ export function createPistonTools(
         .max(1)
         .default(0.5)
         .describe("Base vibration intensity (0.0 to 1.0)."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, plays that pattern for 'duration' ms instead of the built-in piston motion.",
+        ),
     },
 
-    async ({ duration, steps, vibrationPower }) => {
+    async ({ duration, steps, vibrationPower, customPattern }) => {
       debugLog(
         "PistonTool",
         `Starting piston motion: duration=${duration}ms, steps=${steps}, power=${vibrationPower}`,
@@ -61,6 +67,57 @@ export function createPistonTools(
       // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
       engine.stopAll();
+
+      // --- Custom pattern branch ---
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const patternIntensity = entry.intensity ?? vibrationPower;
+        validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
+        updateState(patternIntensity);
+
+        try {
+          const id = await engine.play(
+            device.index,
+            entry.tracks,
+            { loop: entry.loop, intensity: entry.intensity, timeout: duration },
+          );
+
+          setTimeout(() => {
+            if (!signal.aborted) {
+              engine.stop(id);
+              stopAll(device);
+              debugLog("PistonTool", "Custom pattern sequence completed.");
+            }
+          }, duration);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Started custom pattern "${customPattern}" as piston (${duration}ms). ${getStateSummary()}`,
+              },
+            ],
+          };
+        } catch (e) {
+          errorLog("PistonTool", "Failed to start custom pattern:", e);
+          return {
+            content: [{ type: "text", text: `Error starting custom pattern: ${e}` }],
+            isError: true,
+          };
+        }
+      }
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVibration, vibrationPower, "vibration");
