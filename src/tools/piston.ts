@@ -1,11 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice } from "buttplug";
+import { type Device } from "@zendrex/buttplug.js";
 import {
   type SamNeoVersion,
   deviceState,
-  setVibration,
-  setVacuum,
   stopAll,
   updateState,
   startNewSession,
@@ -14,6 +12,8 @@ import {
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
+import { engine } from "../index.js";
+import { type Keyframe } from "@zendrex/buttplug.js";
 
 /**
  * Registers the Piston-like motion tool with the MCP server.
@@ -21,7 +21,7 @@ import { CONFIG } from "../utils/config.js";
  */
 export function createPistonTools(
   server: McpServer,
-  device: ButtplugClientDevice,
+  device: Device,
   deviceVersion: SamNeoVersion,
 ) {
   server.tool(
@@ -57,8 +57,9 @@ export function createPistonTools(
         `Starting piston motion: duration=${duration}ms, steps=${steps}, power=${vibrationPower}`,
       );
 
-      // Start a new orchestration session
+      // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
+      engine.stopAll();
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVibration, vibrationPower, "vibration");
@@ -70,51 +71,50 @@ export function createPistonTools(
       const delay = duration / steps;
 
       try {
+        // Construct the keyframes
+        const keyframes: Keyframe[] = [];
+        
         // SYNC STEP: Trigger the motor IMMEDIATELY with a small prime
-        // Also ensure vacuum is SILENCED for this exclusive piston session
-        await setVibration(device, deviceVersion, enforceVibration(0.1));
-        await setVacuum(device, deviceVersion, 0);
+        keyframes.push({ duration: 0, value: enforceVibration(0.1) });
 
-        // Background sequence for the thrusting pattern
-        (async () => {
-          try {
-            for (let i = 1; i < steps; i++) {
-              // Exit immediately if a new command session has started
-              if (signal.aborted) return;
+        for (let i = 1; i < steps; i++) {
+          const intensity = diff * i;
+          const actualIntensity =
+            deviceVersion === "original"
+              ? vibrationPower // Keep base power steady on one vibrator
+              : intensity * vibrationPower; // Ramp up on Neo 2
+              
+          keyframes.push({
+            duration: delay,
+            value: enforceVibration(actualIntensity),
+            // Defaulting to linear easing for smooth thrusting interpolation
+            easing: "linear",
+          });
+        }
 
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              if (signal.aborted) return;
-
-              const intensity = diff * i;
-              const actualIntensity =
-                deviceVersion === "original"
-                  ? vibrationPower // Keep base power steady on one vibrator
-                  : intensity * vibrationPower; // Ramp up on Neo 2
-
-              await setVibration(
-                device,
-                deviceVersion,
-                enforceVibration(actualIntensity),
-              );
-            }
-
-            // Only stop if this session is still the active one
-            if (!signal.aborted) {
-              await stopAll(device);
-              debugLog("PistonTool", "Sequence completed.");
-            }
-          } catch (error) {
-            if (!signal.aborted) {
-              errorLog("PistonTool", "Background sequence error:", error);
-            }
+        // Fire the pattern through the engine
+        const id = await engine.play(device.index, [
+          {
+            featureIndex: 0,
+            outputType: "Vibrate",
+            keyframes: keyframes,
           }
-        })();
+        ]);
+
+        // Stop the engine pattern after duration
+        setTimeout(() => {
+          if (!signal.aborted) {
+            engine.stop(id);
+            stopAll(device); // Reset levels to 0
+            debugLog("PistonTool", "Sequence completed.");
+          }
+        }, duration);
 
         return {
           content: [
             {
               type: "text",
-              text: `Started piston motion sequence (${duration}ms). ${getStateSummary()}`,
+              text: `Started pattern engine piston motion sequence (${duration}ms). ${getStateSummary()}`,
             },
           ],
         };

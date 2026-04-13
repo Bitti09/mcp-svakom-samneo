@@ -6,9 +6,11 @@
 
 import {
   ButtplugClient,
-  ButtplugNodeWebsocketClientConnector,
-  ButtplugClientDevice,
-} from "buttplug";
+  Device,
+  consoleLogger,
+  PatternEngine,
+  PatternEngineClient,
+} from "@zendrex/buttplug.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -35,6 +37,11 @@ export const server: McpServer = new McpServer({
   version: CONFIG.VERSION,
 });
 
+/**
+ * The global PatternEngine instance for dispatching advanced, rhythmic commands.
+ */
+export let engine: PatternEngine;
+
 function isSamNeoDevice(deviceName: string): boolean {
   const normalizedName = deviceName.toLowerCase();
   const patterns = ["svakom sam neo", "sam neo", "samneo"];
@@ -43,17 +50,16 @@ function isSamNeoDevice(deviceName: string): boolean {
 
 async function findSamNeoDevice(
   client: ButtplugClient,
-): Promise<ButtplugClientDevice> {
+): Promise<Device> {
   // Check existing devices first
-  const existingDevices = Array.from(client.devices.values());
-  const existingSamNeo = existingDevices.find((device) =>
-    isSamNeoDevice(device.name),
+  const existingSamNeo = client.devices.find((device) =>
+    isSamNeoDevice(device.displayName ?? device.name),
   );
 
   if (existingSamNeo) {
     debugLog(
       "Main",
-      `🎯 Found existing Sam Neo device: ${existingSamNeo.name}`,
+      `🎯 Found existing Sam Neo device: ${existingSamNeo.displayName ?? existingSamNeo.name}`,
     );
     return existingSamNeo;
   }
@@ -63,7 +69,7 @@ async function findSamNeoDevice(
   await client.startScanning();
 
   try {
-    const device = await new Promise<ButtplugClientDevice>(
+    const device = await new Promise<Device>(
       (resolve, reject) => {
         const timeout = setTimeout(() => {
           client.stopScanning();
@@ -72,13 +78,14 @@ async function findSamNeoDevice(
           );
         }, 15000);
 
-        client.on("deviceadded", (d) => {
-          debugLog("Main", `📱 Device found: ${d.name}`);
-          if (isSamNeoDevice(d.name)) {
+        client.on("deviceAdded", ({ data: { device } }) => {
+          const name = device.displayName ?? device.name;
+          debugLog("Main", `📱 Device found: ${name}`);
+          if (isSamNeoDevice(name)) {
             debugLog("Main", `🎯 Sam Neo device matched!`);
             clearTimeout(timeout);
             client.stopScanning();
-            resolve(d);
+            resolve(device);
           }
         });
       },
@@ -93,15 +100,18 @@ async function main() {
   debugLog("Main", `🚀 Starting Svakom Sam Neo MCP Server (v${CONFIG.VERSION})`);
   debugLog("Main", `🔌 Connecting to Buttplug server at ${CONFIG.BUTTPLUG_WS_URL}`);
 
-  const client = new ButtplugClient("mcp-svakom-samneo");
-  const connector = new ButtplugNodeWebsocketClientConnector(CONFIG.BUTTPLUG_WS_URL);
+  const client = new ButtplugClient(CONFIG.BUTTPLUG_WS_URL, {
+    logger: CONFIG.DEBUG ? consoleLogger : undefined,
+    autoReconnect: true,
+    reconnectDelay: 1000,
+  });
+
+  // Initialize the PatternEngine right after client creation so tools can bind it
+  engine = new PatternEngine(client as unknown as PatternEngineClient);
 
   try {
-    await client.connect(connector);
+    await client.connect();
     debugLog("Main", "✅ Client connected to Buttplug server.");
-
-    // Ensure the client's internal device map is populated
-    await (client as any).requestDeviceList();
 
     const device = await findSamNeoDevice(client);
 
@@ -118,7 +128,7 @@ async function main() {
     createExtendedOTools(server, device, deviceVersion);
     createInfoTools(server, device, deviceVersion);
 
-    debugLog("Main", `✅ Connected: ${device.name} (${deviceVersion})`);
+    debugLog("Main", `✅ Connected: ${device.displayName ?? device.name} (${deviceVersion})`);
 
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -128,10 +138,12 @@ async function main() {
     const cleanup = async (signal: string) => {
       debugLog("Main", `🛑 Received ${signal}, starting graceful shutdown...`);
       try {
+        engine.dispose(); // Cleanup pattern engine loops
         await stopAll(device);
         debugLog("Main", "✅ Hardware stopped.");
         await client.disconnect();
-        debugLog("Main", "✅ Buttplug client disconnected.");
+        client.dispose(); // Release event listeners and state
+        debugLog("Main", "✅ Buttplug client disconnected & disposed.");
       } catch (e) {
         errorLog("Main", "Error during shutdown cleanup:", e);
       }
