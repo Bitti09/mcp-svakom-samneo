@@ -8,6 +8,7 @@ import {
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, validateTransition } from "./enforcer.js";
@@ -73,6 +74,7 @@ export function createPistonTools(
       try {
         // Construct the keyframes
         const keyframes: Keyframe[] = [];
+        const { vibrateIndex } = getHardwareMap();
         
         // SYNC STEP: Trigger the motor IMMEDIATELY with a small prime
         keyframes.push({ duration: 0, value: enforceVibration(0.1) });
@@ -95,7 +97,7 @@ export function createPistonTools(
         // Fire the pattern through the engine
         const id = await engine.play(device.index, [
           {
-            featureIndex: 0,
+            featureIndex: vibrateIndex,
             outputType: "Vibrate",
             keyframes: keyframes,
           }

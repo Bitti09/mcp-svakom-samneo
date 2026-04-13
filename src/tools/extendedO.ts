@@ -4,10 +4,10 @@ import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
   SamNeoVersion,
   deviceState,
-  stopAll,
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
@@ -21,7 +21,7 @@ import { engine } from "../index.js";
 export function createExtendedOTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-ExtendedO",
@@ -73,8 +73,8 @@ export function createExtendedOTools(
         `Starting Extended O: drop to ${minimumLevel}, hold=${holdDuration}ms, restore=${restoreDuration}ms`,
       );
 
-      // Start a new orchestration session
-      const signal = startNewSession();
+      // Start a new orchestration session (aborts any previous one)
+      startNewSession();
       engine.stopAll();
 
       const targetVibrate = currentVibration ?? deviceState.lastVibration;
@@ -87,9 +87,7 @@ export function createExtendedOTools(
       // Synchronously update tracked intensities
       updateState(targetVibrate, targetVacuum);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const vibrationKeyframes: Keyframe[] = [];
@@ -112,12 +110,12 @@ export function createExtendedOTools(
         // Fire the pattern through the engine
         await engine.play(device.index, [
           {
-            featureIndex: 0,
+            featureIndex: vibrateIndex,
             outputType: "Vibrate",
             keyframes: vibrationKeyframes,
           },
           {
-            featureIndex: vacuumFeatureIndex,
+            featureIndex: vacuumIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }

@@ -22,7 +22,7 @@ export function createInfoTools(
         if (hasBattery) {
           try {
             batteryLevel = await device.readSensor("Battery");
-          } catch (_e) {
+          } catch {
             // Ignore error if battery read fails
           }
         }

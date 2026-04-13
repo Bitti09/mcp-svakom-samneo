@@ -8,6 +8,7 @@ import {
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
@@ -21,7 +22,7 @@ import { engine } from "../index.js";
 export function createVacuumTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-Vacuum",
@@ -72,9 +73,7 @@ export function createVacuumTools(
 
       const safeIntensity = enforceVacuum(intensity);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const keyframes: Keyframe[] = [];
@@ -96,13 +95,13 @@ export function createVacuumTools(
           device.index,
           [
             {
-              featureIndex: vacuumFeatureIndex,
+              featureIndex: vacuumIndex,
               outputType: vacuumOutputType,
               keyframes: keyframes,
             },
             // Explicitly map vibration track to 0 to silence it during exclusive vacuum session
             {
-              featureIndex: 0,
+              featureIndex: vibrateIndex,
               outputType: "Vibrate",
               keyframes: [{ duration: duration, value: 0 }],
             }

@@ -8,6 +8,7 @@ import {
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
@@ -21,7 +22,7 @@ import { engine } from "../index.js";
 export function createComboTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-Combo",
@@ -64,7 +65,7 @@ export function createComboTools(
 
     async ({
       duration,
-      steps,
+      steps: _steps,
       vibrationPower,
       vacuumIntensity,
       syncMode,
@@ -89,9 +90,7 @@ export function createComboTools(
       const safeVib = enforceVibration(vibrationPower);
       const safeVac = enforceVacuum(vacuumIntensity);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const vibrationKeyframes: Keyframe[] = [];
@@ -135,12 +134,12 @@ export function createComboTools(
         // Play the multi-track pattern simultaneously
         const id = await engine.play(device.index, [
           {
-            featureIndex: 0,
+            featureIndex: vibrateIndex,
             outputType: "Vibrate",
             keyframes: vibrationKeyframes,
           },
           {
-            featureIndex: vacuumFeatureIndex,
+            featureIndex: vacuumIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }
