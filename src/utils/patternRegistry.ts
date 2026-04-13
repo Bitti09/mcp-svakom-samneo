@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { CustomPattern } from "@zendrex/buttplug.js";
 
 /**
  * Easing functions supported by the pattern engine.
@@ -47,17 +46,28 @@ const TrackSchema = z.object({
 /**
  * JET validation schema for user-provided custom patterns.
  *
- * The body (`type`, `tracks`, `intensity`, `loop`) is structurally identical to the
- * library's own `CustomPattern` / `PatternDescriptor` format so that validated entries
- * can be passed directly to `engine.play()` after stripping `name` and `description`.
+ * Matches the shorthand form the library accepts:
+ *   engine.play(deviceIndex, tracks, { loop, intensity })
+ *
+ * JSON file format:
+ * {
+ *   "name": "slow-build",
+ *   "description": "Gradual ramp then pulse",
+ *   "tracks": [
+ *     { "featureIndex": 0, "keyframes": [
+ *         { "value": 0, "duration": 0 },
+ *         { "value": 1, "duration": 1000, "easing": "easeIn" }
+ *     ]}
+ *   ],
+ *   "loop": 3,
+ *   "intensity": 0.8
+ * }
  */
 export const PatternEntrySchema = z.object({
   name: z
     .string()
     .regex(/^[a-z0-9-]+$/, "Name must be lowercase kebab-case (e.g. slow-build)"),
   description: z.string().min(1),
-  // --- everything below mirrors the library's CustomPattern exactly ---
-  type: z.literal("custom"),
   tracks: z.array(TrackSchema).min(1),
   intensity: z.number().min(0).max(1).optional(),
   loop: z.union([z.boolean(), z.number()]).optional(),
@@ -90,17 +100,4 @@ export function formatPatternList(): string {
   const patterns = listPatterns();
   if (patterns.length === 0) return "No custom patterns loaded.";
   return patterns.map((p) => `• ${p.name}: ${p.description}`).join("\n");
-}
-
-/**
- * Strips `name` and `description` from a registry entry and returns the
- * bare `CustomPattern` descriptor ready for `engine.play()`.
- */
-export function toDescriptor(entry: PatternEntry): CustomPattern {
-  return {
-    type: entry.type,
-    tracks: entry.tracks,
-    intensity: entry.intensity,
-    loop: entry.loop,
-  } as CustomPattern;
 }

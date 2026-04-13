@@ -12,7 +12,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
  * Registers the LoadPattern tool with the MCP server.
  *
  * The tool fetches a JSON file from a user-supplied URL, validates it against
- * the JET pattern schema (which mirrors the library's CustomPattern format plus
+ * the JET pattern schema (which mirrors the library's Track[] shorthand plus
  * `name` and `description`), and adds it to the live in-memory registry.
  *
  * Schema summary for the JSON at the URL:
@@ -20,26 +20,25 @@ import { debugLog, errorLog } from "../utils/logger.js";
  * {
  *   "name": "slow-build",          // kebab-case identifier, must be unique
  *   "description": "Gradual ramp", // human-readable label
- *   "type": "custom",              // required literal
  *   "tracks": [                    // one entry per device feature
  *     {
  *       "featureIndex": 0,         // 0-based hardware feature index
  *       "outputType": "Vibrate",   // optional output type hint
  *       "keyframes": [
- *         { "value": 0.0, "duration": 0 },
- *         { "value": 0.8, "duration": 3000, "easing": "linear" }
+ *         { "value": 0, "duration": 0 },
+ *         { "value": 0.8, "duration": 3000, "easing": "easeIn" }
  *       ]
  *     }
  *   ],
  *   "intensity": 0.8,              // optional global scaler (0–1)
- *   "loop": false                  // optional loop flag or loop-count
+ *   "loop": 3                      // optional: boolean or loop count
  * }
  * ```
  */
 export function createPatternLoaderTool(server: McpServer) {
   server.tool(
     "Svakom-Sam-Neo-LoadPattern",
-    `Fetches a custom pattern JSON from a URL, validates it against the JET schema (mirrors the library CustomPattern format: { name, description, type: "custom", tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Returns the full updated list of available custom patterns on success.`,
+    `Fetches a custom pattern JSON from a URL, validates it against the JET schema ({ name, description, tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Returns the full updated list of available custom patterns on success.`,
     {
       url: z.string().url().describe("HTTP(S) URL pointing to the custom pattern JSON file."),
     },

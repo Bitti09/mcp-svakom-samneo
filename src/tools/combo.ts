@@ -14,7 +14,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
-import { getPattern, toDescriptor } from "../utils/patternRegistry.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Combo tool with the MCP server.
@@ -109,7 +109,11 @@ export function createComboTools(
         updateState(patternIntensity, patternIntensity);
 
         try {
-          const id = await engine.play(device.index, toDescriptor(entry), { timeout: duration });
+          const id = await engine.play(
+            device.index,
+            entry.tracks,
+            { loop: entry.loop, intensity: entry.intensity, timeout: duration },
+          );
 
           setTimeout(() => {
             if (!signal.aborted) {

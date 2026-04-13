@@ -14,7 +14,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
-import { getPattern, toDescriptor } from "../utils/patternRegistry.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Vacuum/Suction tool with the MCP server.
@@ -92,7 +92,11 @@ export function createVacuumTools(
         updateState(undefined, patternIntensity);
 
         try {
-          const id = await engine.play(device.index, toDescriptor(entry), { timeout: duration });
+          const id = await engine.play(
+            device.index,
+            entry.tracks,
+            { loop: entry.loop, intensity: entry.intensity, timeout: duration },
+          );
 
           setTimeout(() => {
             if (!signal.aborted) {
