@@ -1,19 +1,21 @@
-# Svakom Sam Neo MCP Server
+# Svakom Sam Neo MCP Server (AI Chat Optimized)
 ![AI Assisted](https://img.shields.io/badge/AI-Assisted-blue?style=flat-square)
 
-Fork of [Kyure-A/mcp-svakom-samneo](https://github.com/Kyure-A/mcp-svakom-samneo) updated for **Buttplug.io Spec v4**.
+A fork of [Kyure-A/mcp-svakom-samneo](https://github.com/Kyure-A/mcp-svakom-samneo) optimized for AI roleplay and interactive chat environments using the latest **Buttplug.io Spec v4**.
 
-## Key Fork Highlights
+## Features for AI Chat/Roleplay
 
-*   **Buttplug.io v4 Feature-Map Implementation**: Migration from hardcoded actuator indices to the Spec v4 feature-map model. Uses dynamic runtime discovery for `Vibrate` and `Constrict` outputs across the Sam Neo product line.
-*   **Asynchronous Tool Execution**: Internal event loop decoupling for stimulation tools. Commands are acknowledged via MCP immediately, with stimulation loops executing out-of-band to maintain server responsiveness.
+*   **Asynchronous (Fire-and-Forget) Execution**: Tools return to the AI immediately after triggering hardware. This prevents chat interface freezes during long stimulation patterns and allows the AI to continue the narrative in parallel with physical actions.
+*   **Automatic State Reporting (Implicit Context)**: Every tool response appends a `[STATUS]` summary of current vibration and vacuum intensities. This ensures the AI agent has up-to-date hardware state in its context window without requiring separate `DeviceInfo` calls.
+*   **Session Management & Orchestration**: A central `AbortController` handles overlapping stimulation commands. If the AI sends a new command while a pattern is running, the previous session is silently terminated and replaced by the new intent to prevent mechanical jitter.
+*   **Intensity Transition Validation**: A safety enforcer blocks intensity jumps greater than 70% in a single command (e.g. 0% to 100%). This prevents accidental hardware spikes during autonomous AI control.
 
-## Other Improvements
+## Technical Implementation
 
-*   **Hardware Actuator Caching**: Object-level caching of device features during bootstrap to eliminate per-command Map lookups and reduce CPU jitter during high-frequency loops.
-*   **Process & Connection Safety**: Implementation of `stdin` end-of-stream listeners to trigger hardware `stopAll` and client disconnection handling if the parent process terminates.
-*   **Strict Identity Verification**: Combined name-pattern matching and feature-set signature validation to enforce compatibility and reject other Svakom models (Alex, Vick, etc.).
-*   **Intensity Safety Logic**: Arithmetic floor protection in pattern generation to prevent low-power stimulation steps from being rounded to zero at the hardware level.
+*   **Buttplug.io Spec v4 Migration**: Uses the Spec v4 feature-map model for dynamic actuator discovery (Vibrate/Constrict) instead of hardcoded indices.
+*   **Hardware Actuator Caching**: Features are cached during bootstrap to reduce Map lookups and BLE/CPU overhead during high-frequency loops.
+*   **Safety Clamping**: Ensures all non-zero intensities meet the hardware's minimum thresholds (e.g. 0.1 for vibration, 0.2 for vacuum) to prevent rounding errors.
+*   **Process Lifecycle Handling**: Integrated `stdin` listeners trigger `stopAll` on parent process termination.
 
 ---
 
