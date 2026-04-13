@@ -1,7 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice, ActuatorType } from "buttplug";
-import { SamNeoVersion } from "../main.js";
+import { type ButtplugClientDevice } from "buttplug";
+import {
+  type SamNeoVersion,
+  deviceState,
+  setVibration,
+  setVacuum,
+  stopAll,
+  updateState,
+  startNewSession,
+  getStateSummary,
+} from "../utils/hardware.js";
+import { debugLog, errorLog } from "../utils/logger.js";
+import { enforceVibration, validateTransition } from "./enforcer.js";
+import { CONFIG } from "../utils/config.js";
 
 export function createPistonTools(
   server: McpServer,
@@ -10,82 +22,108 @@ export function createPistonTools(
 ) {
   server.tool(
     "Svakom-Sam-Neo-Piston",
-    "A tool for operating the Svakom Sam Neo, a device that supports the Buttplug protocol. This tool allows the user to stimulate interactively. This tool allows the user to give piston motion.",
+    `A tool for operating the Svakom Sam Neo's piston-like vibration motion.${
+      CONFIG.HARD_MODE
+        ? ""
+        : " AI AGENTS: Intensity jumps >70% from stop are prohibited; use ramps."
+    } Returns current device state.`,
     {
       duration: z
         .number()
         .min(1000)
         .max(100000)
-        .describe(
-          "Thrust count (duration in ms) — the more frequent the thrusts, the more fervent and passionate the rhythm becomes, like a relentless desire that refuses to fade.",
-        ),
+        .describe("Total duration of the movement in milliseconds."),
       steps: z
         .number()
         .min(20)
         .max(1000)
         .default(20)
-        .describe(
-          "Number of steps per thrust — the more steps it takes, the more deliberate and indulgently drawn-out each motion becomes, oozing with a sticky, aching rhythm.",
-        ),
+        .describe("Number of intensity steps per cycle."),
       vibrationPower: z
         .number()
         .min(0)
         .max(1)
         .default(0.5)
-        .describe("Vibration power."),
+        .describe("Base vibration intensity (0.0 to 1.0)."),
     },
 
     async ({ duration, steps, vibrationPower }) => {
+      debugLog(
+        "PistonTool",
+        `Starting piston motion: duration=${duration}ms, steps=${steps}, power=${vibrationPower}`,
+      );
+
+      // Start a new orchestration session
+      const signal = startNewSession();
+
+      // AI SAFETY: Prevent extreme jolts
+      validateTransition(deviceState.lastVibration, vibrationPower, "vibration");
+
+      // Record intended power immediately for DeviceInfo visibility
+      updateState(vibrationPower);
+
+      const diff = 1 / steps;
+      const delay = duration / steps;
+
       try {
-        const diff = 1 / steps;
-        const delay = duration / steps;
+        // SYNC STEP: Trigger the motor IMMEDIATELY with a small prime
+        // Also ensure vacuum is SILENCED for this exclusive piston session
+        await setVibration(device, deviceVersion, enforceVibration(0.1));
+        await setVacuum(device, deviceVersion, 0);
 
-        console.error(`[PistonTool] Device version: ${deviceVersion}`);
+        // Background sequence for the thrusting pattern
+        (async () => {
+          try {
+            for (let i = 1; i < steps; i++) {
+              // Exit immediately if a new command session has started
+              if (signal.aborted) return;
 
-        if (deviceVersion === SamNeoVersion.ORIGINAL) {
-          // Original Sam Neo: Use old vibrate API with 2 vibrators
-          for (let i = 0; i < steps; i++) {
-            const intensity = diff * i;
-            // vibrationPower controls base vibration, intensity controls piston motion
-            await device.vibrate([vibrationPower, intensity]);
-            await new Promise((resolve) => setTimeout(resolve, delay));
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              if (signal.aborted) return;
+
+              const intensity = diff * i;
+              const actualIntensity =
+                deviceVersion === "original"
+                  ? vibrationPower // Keep base power steady on one vibrator
+                  : intensity * vibrationPower; // Ramp up on Neo 2
+
+              await setVibration(
+                device,
+                deviceVersion,
+                enforceVibration(actualIntensity),
+              );
+            }
+
+            // Only stop if this session is still the active one
+            if (!signal.aborted) {
+              await stopAll(device);
+              debugLog("PistonTool", "Sequence completed.");
+            }
+          } catch (error) {
+            if (!signal.aborted) {
+              errorLog("PistonTool", "Background sequence error:", error);
+            }
           }
-        } else {
-          // Sam Neo 2 Series (Neo2/Neo2 Pro): Use scalar API with single vibrator
-          for (let i = 0; i < steps; i++) {
-            const intensity = diff * i;
-            await device.scalar([
-              {
-                Index: 0,
-                Scalar: intensity * vibrationPower,
-                ActuatorType: ActuatorType.Vibrate,
-              },
-            ]);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          }
-        }
+        })();
 
-        await device.stop();
-
-        console.error(
-          `[PistonTool] Completed: duration=${duration}ms, steps=${steps}, vibrationPower=${vibrationPower}, device=${deviceVersion}`,
-        );
         return {
           content: [
             {
               type: "text",
-              text: `Piston motion completed - duration: ${duration}ms, steps: ${steps}, vibrationPower: ${vibrationPower}, device: ${deviceVersion}`,
+              text: `Started piston motion sequence (${duration}ms). ${getStateSummary()}`,
             },
           ],
         };
       } catch (e) {
+        errorLog("PistonTool", "Failed to start piston motion:", e);
         return {
           content: [
             {
               type: "text",
-              text: `Error: ${e}`,
+              text: `Error starting piston motion: ${e}`,
             },
           ],
+          isError: true,
         };
       }
     },

@@ -1,136 +1,138 @@
-# Svakom Sam Neo Control Tools
+# Svakom Sam Neo MCP Server
+![AI Assisted](https://img.shields.io/badge/AI-Assisted-blue?style=flat-square)
 
-This document describes how to use the available tools for controlling Svakom Sam Neo devices.
+Fork of [Kyure-A/mcp-svakom-samneo](https://github.com/Kyure-A/mcp-svakom-samneo) updated for **Buttplug.io Spec v4**.
+
+## Key Fork Highlights
+
+*   **Buttplug.io v4 Feature-Map Implementation**: Migration from hardcoded actuator indices to the Spec v4 feature-map model. Uses dynamic runtime discovery for `Vibrate` and `Constrict` outputs across the Sam Neo product line.
+*   **Asynchronous Tool Execution**: Internal event loop decoupling for stimulation tools. Commands are acknowledged via MCP immediately, with stimulation loops executing out-of-band to maintain server responsiveness.
+
+## Other Improvements
+
+*   **Hardware Actuator Caching**: Object-level caching of device features during bootstrap to eliminate per-command Map lookups and reduce CPU jitter during high-frequency loops.
+*   **Process & Connection Safety**: Implementation of `stdin` end-of-stream listeners to trigger hardware `stopAll` and client disconnection handling if the parent process terminates.
+*   **Strict Identity Verification**: Combined name-pattern matching and feature-set signature validation to enforce compatibility and reject other Svakom models (Alex, Vick, etc.).
+*   **Intensity Safety Logic**: Arithmetic floor protection in pattern generation to prevent low-power stimulation steps from being rounded to zero at the hardware level.
+
+---
+
+---
 
 ## Device Support
 
-The tools automatically detect your device type and use the appropriate API:
+Strict signature verification is performed at runtime.
 
 ### Original Sam Neo
-- **Use `Svakom-Sam-Neo-Piston`** - This is all you need!
-- Provides complete vibration and vacuum control through 2 synchronized vibrators
-- One tool handles all functionality (vibration and vacuum)
+*   **`Svakom-Sam-Neo-Piston`**: Synchronized dual-vibrator motion.
+*   **`Svakom-Sam-Neo-ExtendedO`**: Dual-vibrate intensity reduction.
+*   **`Svakom-Sam-Neo-DeviceInfo`**: Battery and hardware diagnostics.
 
-### Sam Neo 2 / Sam Neo 2 Pro  
-- **Use `Svakom-Sam-Neo-Combo`** for simultaneous vibration and vacuum control
-- **Use `Svakom-Sam-Neo-Vacuum`** for vacuum-only control
-- Has separate actuators for independent vibration and vacuum control
+### Sam Neo 2 / Sam Neo 2 Pro (v4)
+*   **`Svakom-Sam-Neo-Piston`**: Single-vibrator patterns.
+*   **`Svakom-Sam-Neo-Combo`**: Vibration and suction control (sync/independent).
+*   **`Svakom-Sam-Neo-Vacuum`**: Physical suction engine patterns.
+*   **`Svakom-Sam-Neo-ExtendedO`**: Actuator-specific intensity reduction.
+*   **`Svakom-Sam-Neo-DeviceInfo`**: v4 Feature-map and battery reporting.
+
+---
 
 ## Available Tools
 
-### Svakom-Sam-Neo-Piston
+### `Svakom-Sam-Neo-Piston`
+Vibration-based motion simulation.
+- **Parameters**: 
+  - `duration`: Total time in milliseconds (1000-100000).
+  - `steps`: Resolution of the motion pattern (20-1000).
+  - `vibrationPower`: Peak intensity (0.0-1.0).
 
-**For Original Sam Neo users - This is your main tool!**
+### `Svakom-Sam-Neo-Vacuum`
+Direct suction control (Sam Neo 2 / Pro only).
+- **Parameters**: 
+  - `intensity`: Suction power (0.0-1.0).
+  - `duration`: Total time in milliseconds (100-30000).
+  - `pattern`: `constant`, `pulse`, or `wave`.
+  - `pulseInterval`: Interval for pulse pattern in ms (optional).
 
-Controls vibration and vacuum functionality with coordinated patterns.
+### `Svakom-Sam-Neo-Combo`
+Synchronized vibration and suction control.
+- **Parameters**: 
+  - `duration`: Total time in milliseconds.
+  - `steps`: Resolution of the motion pattern.
+  - `vibrationPower`: Vibration intensity (0.0-1.0).
+  - `vacuumIntensity`: Suction intensity (0.0-1.0).
+  - `syncMode`: `synchronized`, `alternating`, or `independent`.
+  - `vacuumPattern`: Pattern for suction (`constant`, `pulse`, or `wave`).
 
-**Device compatibility:**
-- **Original Sam Neo**: ✅ **Complete control** - handles vibration and vacuum
-- **Sam Neo 2/2 Pro**: ⚠️ Vibration-only (use Combo tool instead for full functionality)
+### `Svakom-Sam-Neo-ExtendedO`
+Technical climax control (prolongs climax by dropping intensity).
+- **Parameters**: 
+  - `currentVibration`: Intensity to reduce from.
+  - `currentVacuum`: Suction power to reduce from.
+  - `holdDuration`: Time to hold at minimum intensity (ms).
+  - `restoreDuration`: Time to return to original power (ms).
+  - `minimumLevel`: Intensity during the hold phase (default 0.1).
 
-**Parameters:**
-- `duration`: Duration in milliseconds (1000-100000)
-- `steps`: Number of steps per cycle (20-1000, default: 20)
-- `vibrationPower`: Vibration intensity (0-1, default: 0.5)
+### `Svakom-Sam-Neo-DeviceInfo`
+Reports connection status, current intensity states, and the discovered Spec v4 hardware feature-map.
 
-**Usage:**
-```
-Use the Svakom-Sam-Neo-Piston tool with duration 5000ms, 50 steps, and vibration power 0.7
-```
+---
 
-### Svakom-Sam-Neo-Vacuum
+## Safety & Configuration
 
-**For Sam Neo 2/2 Pro users - Vacuum-only control**
+### Hard Mode (Unrestricted Stimulation)
+The server includes an optional **Hard Mode** for advanced users who want unrestricted stimulation. When enabled:
+- **Anti-Jolt Disabled**: The 70% intensity jump limit is lifted, allowing immediate spikes from 0% to 100%.
+- **Hidden Warnings**: AI-facing tool descriptions omit the safety instructions to use ramps, presenting the device as fully unrestricted.
 
-Controls vacuum/suction functionality using dedicated Constrict actuator.
-
-**Device compatibility:**
-- **Original Sam Neo**: ❌ Not needed (use Piston tool for everything)
-- **Sam Neo 2/2 Pro**: ✅ **Vacuum-only control** - dedicated suction patterns and intensity
-
-**Parameters:**
-- `intensity`: Suction power (0-1, default: 0.5)
-- `duration`: Duration in milliseconds (100-30000, default: 1000)
-- `pattern`: Pattern type ("constant" | "pulse" | "wave", default: "constant")
-- `pulseInterval`: Pulse timing in milliseconds (100-2000, default: 500, optional)
-
-**Patterns:**
-- **constant**: Steady suction
-- **pulse**: On/off alternating pattern
-- **wave**: Gradual intensity changes
-
-**Usage:**
-```
-Use the Svakom-Sam-Neo-Vacuum tool with intensity 0.8, duration 3000ms, and wave pattern
-```
-
-### Svakom-Sam-Neo-Combo
-
-**For Sam Neo 2/2 Pro users - Main tool for combined control**
-
-Controls both vibration and vacuum simultaneously with advanced coordination.
-
-**Device compatibility:**
-- **Original Sam Neo**: ✅ Alternative option for advanced patterns (Piston tool is simpler)
-- **Sam Neo 2/2 Pro**: ✅ **Main tool** - independent vibration and vacuum control with sync modes
-
-**Parameters:**
-- `duration`: Total duration in milliseconds (1000-100000)
-- `steps`: Steps for motion pattern (20-1000, default: 20)
-- `vibrationPower`: Vibration intensity (0-1, default: 0.5)
-- `vacuumIntensity`: Vacuum intensity (0-1, default: 0.5)
-- `syncMode`: Coordination mode ("synchronized" | "alternating" | "independent", default: "synchronized")
-- `vacuumPattern`: Vacuum pattern for independent mode ("constant" | "pulse" | "wave", default: "constant")
-
-**Sync Modes:**
-- **synchronized**: Both follow same pattern
-- **alternating**: Opposite patterns (when one is high, other is low)
-- **independent**: Separate simultaneous patterns (Note: Original Sam Neo falls back to synchronized mode)
-
-**Usage:**
-```
-Use the Svakom-Sam-Neo-Combo tool with duration 10000ms, 30 steps, vibration power 0.8, vacuum intensity 0.6, and synchronized mode
+To enable, set the environment variable in your MCP configuration:
+```json
+"env": {
+  "SAM_NEO_HARD_MODE": "true"
+}
 ```
 
-### Svakom-Sam-Neo-ExtendedO
+---
 
-**For Sam Neo 2/2 Pro users - Extended O mode for climax control**
+## Installation & Setup
 
-Simulates the device's Extended O function that instantly reduces both vibration and suction to their lowest intensity to prolong and intensify climax.
+Requires **pnpm** and Node.js v25+.
 
-**Device compatibility:**
-- **Original Sam Neo**: ✅ Works with synchronized dual vibrator control
-- **Sam Neo 2/2 Pro**: ✅ **Full support** - independent control of vibration and vacuum reduction
+1.  **Dependencies**:
+    ```bash
+    pnpm install
+    ```
+2.  **Build**:
+    ```bash
+    pnpm run build
+    ```
+3.  **Verify**:
+    ```bash
+    pnpm test
+    ```
+4.  **MCP Configuration**:
+    ```json
+    "mcp-svakom-samneo": {
+      "command": "node",
+      "args": ["/absolute/path/to/build/index.js"],
+      "env": {
+        "BUTTPLUG_WS_URL": "ws://localhost:12346"
+      }
+    }
+    ```
 
-**Parameters:**
-- `currentVibration`: Current vibration intensity to reduce from (0-1)
-- `currentVacuum`: Current vacuum intensity to reduce from (0-1)
-- `holdDuration`: Time to hold at minimum intensity in milliseconds (1000-60000, default: 10000)
-- `minimumLevel`: Minimum intensity level during Extended O (0-0.3, default: 0.1)
-- `restoreDuration`: Time to restore original intensity in milliseconds (0-5000, default: 500, 0 for instant)
+---
 
-**How it works:**
-1. Instantly reduces both vibration and vacuum to minimum level
-2. Holds at minimum for specified duration
-3. Restores to original intensity (instantly or gradually)
+## Technical Verification
 
-**Usage:**
-```
-Use the Svakom-Sam-Neo-ExtendedO tool with current vibration 0.8, current vacuum 0.7, hold duration 15000ms, and minimum level 0.1
-```
+Automated test suite (Vitest):
+*   **Identity Protection**: Validates hardware signatures for Sam Neo Original and Pro.
+*   **Collision Testing**: Verifies secure rejection of non-Sam Svakom devices (e.g., Alex Neo, Vick Neo 2).
 
-## Quick Reference
+---
 
-### 🎯 Simple Usage Guide
-
-**Original Sam Neo users:**
-- **Just use `Svakom-Sam-Neo-Piston`** - That's it! Everything is included.
-
-**Sam Neo 2/2 Pro users:**
-- **Use `Svakom-Sam-Neo-Combo`** for vibration + vacuum combined
-- **Use `Svakom-Sam-Neo-Vacuum`** for vacuum-only control
-- **Use `Svakom-Sam-Neo-ExtendedO`** for Extended O climax control feature
-
-### 🔄 Device Auto-Detection
-The tools automatically detect your device and use the appropriate control methods. No manual configuration needed!
-
+## Credits
+- **Original Project**: [Kyure-A/mcp-svakom-samneo](https://github.com/Kyure-A/mcp-svakom-samneo)
+- **Implementation Note**: Logic refactoring and Spec v4 migration assisted by Gemini.
+- **Protocol**: [Buttplug.io](https://buttplug.io)
+- **Engine**: [Model Context Protocol](https://modelcontextprotocol.io)
