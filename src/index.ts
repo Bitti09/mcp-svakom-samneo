@@ -152,7 +152,14 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  errorLog("Main", "Unhandled exception:", e);
-  process.exit(1);
-});
+import { pathToFileURL } from "url";
+
+/**
+ * Main execution loop: only runs if this file is the entry point.
+ */
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    errorLog("Main", "Unhandled exception:", e);
+    process.exit(1);
+  });
+}
