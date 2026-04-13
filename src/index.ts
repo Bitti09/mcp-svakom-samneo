@@ -29,7 +29,7 @@ import {
  * The Model Context Protocol (MCP) server instance.
  * Exposes tools for controlling Svakom Sam Neo hardware.
  */
-export const server = new McpServer({
+export const server: McpServer = new McpServer({
   name: "Svakom Samneo (@bitti09 fork)",
   version: "1.1.0",
 });
