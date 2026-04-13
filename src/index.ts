@@ -34,6 +34,9 @@ export const server = new McpServer({
   version: "1.1.0",
 });
 
+// Configuration
+const BUTTPLUG_WS_URL = process.env.BUTTPLUG_WS_URL || "ws://localhost:12346";
+
 function isSamNeoDevice(deviceName: string): boolean {
   const normalizedName = deviceName.toLowerCase();
   const patterns = ["svakom sam neo", "sam neo", "samneo"];
