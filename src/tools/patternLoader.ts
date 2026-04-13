@@ -9,6 +9,23 @@ import {
 import { debugLog, errorLog } from "../utils/logger.js";
 
 /**
+ * Names that are reserved for built-in operation modes across the three motion tools.
+ * Custom patterns must not claim these names to avoid confusion with internal parameters.
+ *
+ * Vacuum `pattern` values:   constant | pulse | wave
+ * Combo  `syncMode` values:  synchronized | alternating | independent
+ * Combo  `vacuumPattern`:    constant | pulse | wave  (same set as Vacuum)
+ */
+const BLACKLISTED_PATTERN_NAMES: Record<string, string> = {
+  "constant":     "Reserved name — used as the built-in 'constant' vacuum/combo mode.",
+  "pulse":        "Reserved name — used as the built-in 'pulse' vacuum/combo mode.",
+  "wave":         "Reserved name — used as the built-in 'wave' vacuum/combo mode.",
+  "synchronized": "Reserved name — used as the built-in 'synchronized' combo sync-mode.",
+  "alternating":  "Reserved name — used as the built-in 'alternating' combo sync-mode.",
+  "independent":  "Reserved name — used as the built-in 'independent' combo sync-mode.",
+};
+
+/**
  * Registers the LoadPattern tool with the MCP server.
  *
  * The tool fetches a JSON file from a user-supplied URL, validates it against
@@ -38,7 +55,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 export function createPatternLoaderTool(server: McpServer) {
   server.tool(
     "Svakom-Sam-Neo-LoadPattern",
-    `Fetches a custom pattern JSON from a URL, validates it against the JET schema ({ name, description, tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Accepts either a single pattern object or an array of pattern objects. Already-loaded names are skipped. Returns the full updated list of available custom patterns on success.`,
+    `Fetches a custom pattern JSON from a URL, validates it against the JET schema ({ name, description, tracks: [{ featureIndex, keyframes: [{ value, duration, easing? }], outputType?, clockwise? }], intensity?, loop? }), and registers it for use with other tools via the 'customPattern' parameter. Accepts either a single pattern object or an array of pattern objects. Already-loaded names are skipped. Reserved internal names (constant, pulse, wave, synchronized, alternating, independent) are rejected with a reason. Returns the full updated list of available custom patterns on success.`,
     {
       url: z.string().url().describe("HTTP(S) URL pointing to the custom pattern JSON file."),
     },
@@ -91,9 +108,13 @@ export function createPatternLoaderTool(server: McpServer) {
 
       const loaded: string[] = [];
       const skipped: string[] = [];
+      const blocked: Array<{ name: string; reason: string }> = [];
 
       for (const pattern of patterns) {
-        if (getPattern(pattern.name)) {
+        const blacklistReason = BLACKLISTED_PATTERN_NAMES[pattern.name];
+        if (blacklistReason !== undefined) {
+          blocked.push({ name: pattern.name, reason: blacklistReason });
+        } else if (getPattern(pattern.name)) {
           skipped.push(pattern.name);
         } else {
           registerPattern(pattern);
@@ -103,6 +124,12 @@ export function createPatternLoaderTool(server: McpServer) {
       }
 
       const lines: string[] = [];
+      if (blocked.length > 0) {
+        const blockedLines = blocked
+          .map(({ name, reason }) => `  • "${name}": ${reason}`)
+          .join("\n");
+        lines.push(`🚫 ${blocked.length} pattern(s) use reserved names and were rejected:\n${blockedLines}`);
+      }
       if (loaded.length > 0) {
         lines.push(`✅ Loaded ${loaded.length} pattern(s): ${loaded.map((n) => `"${n}"`).join(", ")}.`);
       }
@@ -111,8 +138,13 @@ export function createPatternLoaderTool(server: McpServer) {
       }
       lines.push(`\nAvailable custom patterns:\n${formatPatternList()}`);
 
+      // If every entry was blocked (no successes, no duplicates) treat it as an error
+      // so the AI knows it must tell the user to rename their patterns.
+      const allBlocked = blocked.length > 0 && loaded.length === 0 && skipped.length === 0;
+
       return {
         content: [{ type: "text", text: lines.join("\n") }],
+        ...(allBlocked ? { isError: true } : {}),
       };
     },
   );
