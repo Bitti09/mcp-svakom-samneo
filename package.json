@@ -1,6 +1,6 @@
 {
   "name": "@bitti09/mcp-svakom-samneo",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP server for Svakom Sam Neo device control via Buttplug.io",
   "repository": {
     "type": "git",

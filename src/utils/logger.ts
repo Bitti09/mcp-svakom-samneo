@@ -2,19 +2,14 @@
  * Centralized logging utility for Svakom Sam Neo MCP Server.
  */
 
-/**
- * Flag indicating whether diagnostic debug logging is enabled.
- * Controlled by the DEBUG environment variable.
- */
-export const DEBUG_MODE =
-  process.env.DEBUG === "true" || process.env.DEBUG === undefined;
+import { CONFIG } from "./config.js";
 
 /**
  * Logs a message to stderr if debug mode is enabled.
  * Standard MCP requires stdout for communication, so all logs must go to stderr.
  */
 export function debugLog(source: string, ...args: any[]) {
-  if (DEBUG_MODE) {
+  if (CONFIG.DEBUG) {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] [${source}]`, ...args);
   }

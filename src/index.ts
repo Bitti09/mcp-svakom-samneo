@@ -18,6 +18,7 @@ import { createComboTools } from "./tools/combo.js";
 import { createExtendedOTools } from "./tools/extendedO.js";
 import { createInfoTools } from "./tools/info.js";
 
+import { CONFIG } from "./utils/config.js";
 import { debugLog, errorLog } from "./utils/logger.js";
 import {
   detectSamNeoVersion,
@@ -31,11 +32,8 @@ import {
  */
 export const server: McpServer = new McpServer({
   name: "Svakom Samneo (@bitti09 fork)",
-  version: "1.1.0",
+  version: CONFIG.VERSION,
 });
-
-// Configuration
-const BUTTPLUG_WS_URL = process.env.BUTTPLUG_WS_URL || "ws://localhost:12346";
 
 function isSamNeoDevice(deviceName: string): boolean {
   const normalizedName = deviceName.toLowerCase();
@@ -92,11 +90,11 @@ async function findSamNeoDevice(
 }
 
 async function main() {
-  debugLog("Main", `🚀 Starting Svakom Sam Neo MCP Server (v1.1.0)`);
-  debugLog("Main", `🔌 Connecting to Buttplug server at ${BUTTPLUG_WS_URL}`);
+  debugLog("Main", `🚀 Starting Svakom Sam Neo MCP Server (v${CONFIG.VERSION})`);
+  debugLog("Main", `🔌 Connecting to Buttplug server at ${CONFIG.BUTTPLUG_WS_URL}`);
 
   const client = new ButtplugClient("mcp-svakom-samneo");
-  const connector = new ButtplugNodeWebsocketClientConnector(BUTTPLUG_WS_URL);
+  const connector = new ButtplugNodeWebsocketClientConnector(CONFIG.BUTTPLUG_WS_URL);
 
   try {
     await client.connect(connector);
