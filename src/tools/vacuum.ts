@@ -14,6 +14,10 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 
+/**
+ * Registers the Vacuum/Suction tool with the MCP server.
+ * Supports constant, pulse, and wave suction patterns.
+ */
 export function createVacuumTools(
   server: McpServer,
   device: ButtplugClientDevice,

@@ -3,6 +3,10 @@ import { type ButtplugClientDevice, InputType, OutputType } from "buttplug";
 import { type SamNeoVersion, deviceState } from "../utils/hardware.js";
 import { errorLog } from "../utils/logger.js";
 
+/**
+ * Registers informational tools with the MCP server.
+ * Provides battery status, connection diagnostics, and state summaries.
+ */
 export function createInfoTools(
   server: McpServer,
   device: ButtplugClientDevice,

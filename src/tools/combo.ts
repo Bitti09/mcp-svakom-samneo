@@ -16,6 +16,10 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 
+/**
+ * Registers the Combo tool with the MCP server.
+ * Handles simultaneous coordination of vibration and vacuum actuators.
+ */
 export function createComboTools(
   server: McpServer,
   device: ButtplugClientDevice,

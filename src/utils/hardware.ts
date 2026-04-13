@@ -103,7 +103,9 @@ async function reconcileHardwareState(version: SamNeoVersion) {
   }
 }
 
-// Sam Neo device version enum
+/**
+ * Enumeration of supported Svakom Sam Neo hardware versions.
+ */
 export enum SamNeoVersion {
   ORIGINAL = "original",
   NEO2_SERIES = "neo2_series", // Covers both Neo2 and Neo2 Pro
@@ -117,6 +119,9 @@ export interface DeviceState {
   lastVacuum: number;
 }
 
+/**
+ * Singleton instance tracking the current intensity levels for all actuators.
+ */
 export const deviceState: DeviceState = {
   lastVibration: 0,
   lastVacuum: 0,

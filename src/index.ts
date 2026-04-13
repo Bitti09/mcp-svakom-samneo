@@ -1,4 +1,8 @@
-#!/usr/bin/env node
+/**
+ * @module
+ * Main entry point for the Svakom Sam Neo MCP Server.
+ * Handles device discovery, hardware initialization, and tool registration.
+ */
 
 import {
   ButtplugClient,
@@ -21,9 +25,10 @@ import {
   stopAll,
 } from "./utils/hardware.js";
 
-// Configuration
-const BUTTPLUG_WS_URL = process.env.BUTTPLUG_WS_URL || "ws://localhost:12346";
-
+/**
+ * The Model Context Protocol (MCP) server instance.
+ * Exposes tools for controlling Svakom Sam Neo hardware.
+ */
 export const server = new McpServer({
   name: "Svakom Samneo (@bitti09 fork)",
   version: "1.1.0",

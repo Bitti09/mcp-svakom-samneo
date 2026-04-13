@@ -15,6 +15,10 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 
+/**
+ * Registers the Piston-like motion tool with the MCP server.
+ * Handles rhythmic vibration patterns and session orchestration.
+ */
 export function createPistonTools(
   server: McpServer,
   device: ButtplugClientDevice,

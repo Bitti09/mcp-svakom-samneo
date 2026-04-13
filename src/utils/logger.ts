@@ -2,7 +2,10 @@
  * Centralized logging utility for Svakom Sam Neo MCP Server.
  */
 
-// Debug mode is controlled by an environment variable, defaulting to true if not set
+/**
+ * Flag indicating whether diagnostic debug logging is enabled.
+ * Controlled by the DEBUG environment variable.
+ */
 export const DEBUG_MODE =
   process.env.DEBUG === "true" || process.env.DEBUG === undefined;
 

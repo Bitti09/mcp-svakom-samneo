@@ -13,6 +13,10 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 
+/**
+ * Registers the Extended O tool with the MCP server.
+ * Provides climax management by temporarily reducing stimulation intensity.
+ */
 export function createExtendedOTools(
   server: McpServer,
   device: ButtplugClientDevice,
