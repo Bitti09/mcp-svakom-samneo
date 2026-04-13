@@ -1,10 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice } from "buttplug";
+import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
-  type SamNeoVersion,
+  SamNeoVersion,
   deviceState,
-  setCombined,
+  stopAll,
   updateState,
   startNewSession,
   getStateSummary,
@@ -12,6 +12,7 @@ import {
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
+import { engine } from "../index.js";
 
 /**
  * Registers the Extended O tool with the MCP server.
@@ -19,7 +20,7 @@ import { CONFIG } from "../utils/config.js";
  */
 export function createExtendedOTools(
   server: McpServer,
-  device: ButtplugClientDevice,
+  device: Device,
   deviceVersion: SamNeoVersion,
 ) {
   server.tool(
@@ -74,6 +75,7 @@ export function createExtendedOTools(
 
       // Start a new orchestration session
       const signal = startNewSession();
+      engine.stopAll();
 
       const targetVibrate = currentVibration ?? deviceState.lastVibration;
       const targetVacuum = currentVacuum ?? deviceState.lastVacuum;
@@ -85,67 +87,47 @@ export function createExtendedOTools(
       // Synchronously update tracked intensities
       updateState(targetVibrate, targetVacuum);
 
+      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
+      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
+      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+
       try {
-        // SYNC STEP: Immediately drop intensity
-        await setCombined(
-          device,
-          deviceVersion,
-          enforceVibration(minimumLevel),
-          enforceVacuum(minimumLevel),
-        );
+        const vibrationKeyframes: Keyframe[] = [];
+        const vacuumKeyframes: Keyframe[] = [];
 
-        // Background sequence for hold and restore
-        (async () => {
-          try {
-            // Step 1: Hold
-            await new Promise((resolve) => setTimeout(resolve, holdDuration));
-            if (signal.aborted) return;
+        // 1. Immediately drop to minimum Level
+        vibrationKeyframes.push({ duration: 0, value: enforceVibration(minimumLevel) });
+        vacuumKeyframes.push({ duration: 0, value: enforceVacuum(minimumLevel) });
 
-            // Step 2: Restore
-            if (restoreDuration === 0) {
-              if (signal.aborted) return;
-              await setCombined(
-                device,
-                deviceVersion,
-                enforceVibration(targetVibrate),
-                enforceVacuum(targetVacuum),
-              );
-            } else {
-              const steps = 10;
-              const stepDelay = restoreDuration / steps;
-              const vibrationStep = (targetVibrate - minimumLevel) / steps;
-              const vacuumStep = (targetVacuum - minimumLevel) / steps;
+        // 2. Hold at minimum level
+        vibrationKeyframes.push({ duration: holdDuration, value: enforceVibration(minimumLevel) });
+        vacuumKeyframes.push({ duration: holdDuration, value: enforceVacuum(minimumLevel) });
 
-              for (let i = 1; i <= steps; i++) {
-                if (signal.aborted) return;
-                await new Promise((resolve) => setTimeout(resolve, stepDelay));
-                if (signal.aborted) return;
+        // 3. Restore to target level
+        if (restoreDuration > 0) {
+          vibrationKeyframes.push({ duration: restoreDuration, value: enforceVibration(targetVibrate), easing: "easeInOut" });
+          vacuumKeyframes.push({ duration: restoreDuration, value: enforceVacuum(targetVacuum), easing: "easeInOut" });
+        }
 
-                const vLevel = minimumLevel + vibrationStep * i;
-                const vacLevel = minimumLevel + vacuumStep * i;
-                await setCombined(
-                  device,
-                  deviceVersion,
-                  enforceVibration(vLevel),
-                  enforceVacuum(vacLevel),
-                );
-              }
-            }
-            if (!signal.aborted) {
-              debugLog("ExtendedO", "Sequence completed.");
-            }
-          } catch (e) {
-            if (!signal.aborted) {
-              errorLog("ExtendedO", "Background loop error:", e);
-            }
+        // Fire the pattern through the engine
+        await engine.play(device.index, [
+          {
+            featureIndex: 0,
+            outputType: "Vibrate",
+            keyframes: vibrationKeyframes,
+          },
+          {
+            featureIndex: vacuumFeatureIndex,
+            outputType: vacuumOutputType,
+            keyframes: vacuumKeyframes,
           }
-        })();
+        ]);
 
         return {
           content: [
             {
               type: "text",
-              text: `Started Extended O climax control sequence (${holdDuration}ms hold). ${getStateSummary()}`,
+              text: `Started pattern engine Extended O climax control sequence (${holdDuration}ms hold). ${getStateSummary()}`,
             },
           ],
         };

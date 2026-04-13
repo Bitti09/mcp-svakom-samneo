@@ -1,23 +1,12 @@
-import {
-  ButtplugClientDevice,
-  DeviceOutput,
-  OutputType,
-} from "buttplug";
+import { Device } from "@zendrex/buttplug.js";
 import { debugLog } from "./logger.js";
 
-// Session Management & Throttling
+// Session Management
 let activeController: AbortController | null = null;
-let lastMessageTime: number = 0;
-const THROTTLE_INTERVAL = 110; // User-defined safety margin in ms
+let globalDevice: Device | null = null;
 
-/**
- * State for Target Reconciliation.
- * This ensures that if multiple calls come in during a throttle window,
- * only the LATEST values for each motor are sent.
- */
-let targetVibration: number | null = null;
-let targetVacuum: number | null = null;
-let isHardwareProcessing = false;
+// Replaced by Zendrex PatternEngine orchestration
+// Direct target state mapping handles simple static output now
 
 /**
  * Starts a new stimulation session, instantly aborting any previous one.
@@ -30,77 +19,6 @@ export function startNewSession(): AbortSignal {
   }
   activeController = new AbortController();
   return activeController.signal;
-}
-
-/**
- * Core throttled loop. Orchestrates sending target states to the device
- * while respecting the THROTTLE_INTERVAL and skipping stale intermediate states.
- */
-async function reconcileHardwareState(version: SamNeoVersion) {
-  if (isHardwareProcessing) return;
-  isHardwareProcessing = true;
-
-  try {
-    // Keep processing while there are pending targets (fresh sets)
-    while (targetVibration !== null || targetVacuum !== null) {
-      if (!cache) break;
-
-      const now = Date.now();
-      const wait = Math.max(0, lastMessageTime + THROTTLE_INTERVAL - now);
-      if (wait > 0) {
-        await new Promise((resolve) => setTimeout(resolve, wait));
-      }
-
-      // Grab the latest targets and clear their flags
-      const v = targetVibration;
-      const vac = targetVacuum;
-      targetVibration = null;
-      targetVacuum = null;
-
-      // Update timestamp BEFORE executing to keep the interval strict
-      lastMessageTime = Date.now();
-
-      try {
-        const promises: Promise<void>[] = [];
-
-        // 1. Process Vibration Update
-        if (v !== null) {
-          const vCmd = DeviceOutput.Vibrate.percent(v);
-          if (version === SamNeoVersion.ORIGINAL) {
-            promises.push(
-              ...cache.vibrators.map((f: any) => f.runOutput(vCmd)),
-            );
-          } else if (cache.vibrators[0]) {
-            promises.push(cache.vibrators[0].runOutput(vCmd));
-          }
-        }
-
-        // 2. Process Vacuum Update
-        if (vac !== null) {
-          if (version === SamNeoVersion.NEO2_SERIES && cache.constrictor) {
-            promises.push(
-              cache.constrictor.runOutput(DeviceOutput.Constrict.percent(vac)),
-            );
-          } else if (
-            version === SamNeoVersion.ORIGINAL &&
-            cache.vacuumVibrator
-          ) {
-            promises.push(
-              cache.vacuumVibrator.runOutput(DeviceOutput.Vibrate.percent(vac)),
-            );
-          }
-        }
-
-        if (promises.length > 0) {
-          await Promise.all(promises);
-        }
-      } catch (e) {
-        debugLog("Hardware", `❌ Hardware reconciliation failed: ${e}`);
-      }
-    }
-  } finally {
-    isHardwareProcessing = false;
-  }
 }
 
 /**
@@ -143,140 +61,135 @@ export function getStateSummary(): string {
 }
 
 /**
- * Hardware cache to store actuator references once identified.
- * We use 'any' here because the specific feature type is not exported by buttplug-js v4.
- */
-interface HardwareCache {
-  vibrators: any[];
-  constrictor?: any;
-  vacuumVibrator?: any;
-}
-
-let cache: HardwareCache | null = null;
-
-/**
  * Initializes the hardware cache for the connected device.
  * Called once during startup in index.ts.
  */
 export function initializeHardware(
-  device: ButtplugClientDevice,
+  device: Device,
   version: SamNeoVersion,
 ) {
-  debugLog("Hardware", `🔌 Initializing hardware cache for ${device.name}...`);
-  const allFeatures = Array.from(device.features.values());
-
-  const vibrators = allFeatures.filter((f) => f.hasOutput(OutputType.Vibrate));
-  const constrictor = allFeatures.find((f) => f.hasOutput(OutputType.Constrict));
-
-  cache = {
-    vibrators,
-    constrictor,
-    // On Original Sam Neo, the second vibrator is used for vacuum
-    vacuumVibrator:
-      version === SamNeoVersion.ORIGINAL
-        ? vibrators[1] || vibrators[0]
-        : undefined,
-  };
-
-  debugLog(
-    "Hardware",
-    `✅ Cache built: ${vibrators.length} vibrators, ${
-      constrictor ? "1" : "0"
-    } constrictors identified.`,
-  );
+  debugLog("Hardware", `🔌 Initializing hardware mapping for ${device.displayName ?? device.name}...`);
+  globalDevice = device;
+  debugLog("Hardware", `✅ Mapping built for ${version}.`);
 }
 
 /**
  * Detects the Sam Neo device version based on its hardware features and name.
- * Implements strict verification using official Buttplug.io device names.
  */
 export function detectSamNeoVersion(
-  device: ButtplugClientDevice,
+  device: Device,
 ): SamNeoVersion {
-  const normalizedName = device.name.toLowerCase();
-  const hasConstrict = device.hasOutput(OutputType.Constrict);
-
-  // Count vibration features
-  let vibrateCount = 0;
-  for (const feature of device.features.values()) {
-    if (feature.hasOutput(OutputType.Vibrate)) {
-      vibrateCount++;
-    }
-  }
-
+  const normalizedName = (device.displayName ?? device.name).toLowerCase();
+  const hasConstrict = device.canOutput("Constrict");
+  
   debugLog(
     "Hardware",
-    `🔍 Feature detection [${device.name}]: hasConstrict=${hasConstrict}, vibrateCount=${vibrateCount}`,
+    `🔍 Feature detection [${normalizedName}]: canConstrict=${hasConstrict}`,
   );
 
   // Safety: Verify this is actually a Sam Neo device before proceeding
   if (!normalizedName.includes("sam neo")) {
-    const errorMsg = `Identity mismatch: Device "${device.name}" is not a recognized Sam Neo product.`;
+    const errorMsg = `Identity mismatch: Device "${normalizedName}" is not a recognized Sam Neo product.`;
     debugLog("Hardware", `🛡️  ${errorMsg}`);
     throw new Error(errorMsg);
   }
 
-  // Sam Neo 2 / Pro: Exact signature (1 Vib + 1 Constrict)
-  // Names: "Sam Neo 2", "Sam Neo 2 Pro"
-  if (normalizedName.includes("sam neo 2") && hasConstrict && vibrateCount === 1) {
+  // Sam Neo 2 / Pro: Has Constrict
+  if (normalizedName.includes("sam neo 2") && hasConstrict) {
     debugLog("Hardware", `✅ Detected Sam Neo 2 / Pro series`);
     return SamNeoVersion.NEO2_SERIES;
   }
 
-  // Original Sam Neo: Exact signature (2 Vibs, NO Constrict)
-  // Name: "Sam Neo"
-  if (!hasConstrict && vibrateCount === 2) {
+  // Original Sam Neo: Uses twin vibrators, no Constrict
+  if (!hasConstrict) {
     debugLog("Hardware", `✅ Detected Original Sam Neo series`);
+    // Ideally we would verify it has 2 vibrate features, but Zendrex abstracts this slightly.
     return SamNeoVersion.ORIGINAL;
   }
 
-  const errorMsg = `Unsupported configuration for "${device.name}". Signature: [vibs:${vibrateCount}, suction:${hasConstrict ? "yes" : "no"}]`;
+  const errorMsg = `Unsupported configuration for "${normalizedName}".`;
   debugLog("Hardware", `❌ ${errorMsg}`);
   throw new Error(errorMsg);
 }
 
 /**
- * Controls vibration for both Sam Neo versions using target reconciliation.
+ * Controls vibration for both Sam Neo versions directly.
  */
 export async function setVibration(
-  _device: ButtplugClientDevice,
+  _device: Device,
   version: SamNeoVersion,
   intensity: number,
 ) {
-  targetVibration = intensity;
-  return reconcileHardwareState(version);
+  if (!globalDevice) return;
+  try {
+    if (version === SamNeoVersion.NEO2_SERIES) {
+      await globalDevice.vibrate(intensity);
+    } else {
+      await globalDevice.vibrate([
+        { index: 0, value: intensity },
+        { index: 1, value: deviceState.lastVacuum }
+      ]);
+    }
+  } catch (e) {
+    debugLog("Hardware", `❌ Vibration failed: ${e}`);
+  }
 }
 
 /**
- * Controls vacuum/suction for both Sam Neo versions using target reconciliation.
+ * Controls vacuum/suction for both Sam Neo versions directly.
  */
 export async function setVacuum(
-  _device: ButtplugClientDevice,
+  _device: Device,
   version: SamNeoVersion,
   intensity: number,
 ) {
-  targetVacuum = intensity;
-  return reconcileHardwareState(version);
+  if (!globalDevice) return;
+  try {
+    if (version === SamNeoVersion.NEO2_SERIES) {
+      await globalDevice.constrict(intensity);
+    } else {
+      await globalDevice.vibrate([
+        { index: 0, value: deviceState.lastVibration },
+        { index: 1, value: intensity }
+      ]);
+    }
+  } catch (e) {
+    debugLog("Hardware", `❌ Vacuum failed: ${e}`);
+  }
 }
 
 /**
- * Controls both vibration and vacuum simultaneously.
+ * Controls both vibration and vacuum simultaneously directly.
  */
 export async function setCombined(
-  _device: ButtplugClientDevice,
+  _device: Device,
   version: SamNeoVersion,
   vibrationIntensity: number,
   vacuumIntensity: number,
 ) {
-  targetVibration = vibrationIntensity;
-  targetVacuum = vacuumIntensity;
-  return reconcileHardwareState(version);
+  if (!globalDevice) return;
+  try {
+    if (version === SamNeoVersion.NEO2_SERIES) {
+      // Zendrex requires them to be discrete calls for neo 2
+      await Promise.all([
+        globalDevice.vibrate(vibrationIntensity),
+        globalDevice.constrict(vacuumIntensity)
+      ]);
+    } else {
+      await globalDevice.vibrate([
+        { index: 0, value: vibrationIntensity },
+        { index: 1, value: vacuumIntensity }
+      ]);
+    }
+  } catch (e) {
+    debugLog("Hardware", `❌ Combined output failed: ${e}`);
+  }
 }
 
 /**
  * Stops all movement on the device and resets state.
  */
-export async function stopAll(device: ButtplugClientDevice) {
+export async function stopAll(device: Device) {
   await device.stop();
   deviceState.lastVibration = 0;
   deviceState.lastVacuum = 0;

@@ -1,12 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice } from "buttplug";
+import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
-  type SamNeoVersion,
+  SamNeoVersion,
   deviceState,
-  setVibration,
-  setVacuum,
-  setCombined,
   stopAll,
   updateState,
   startNewSession,
@@ -15,6 +12,7 @@ import {
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
+import { engine } from "../index.js";
 
 /**
  * Registers the Combo tool with the MCP server.
@@ -22,7 +20,7 @@ import { CONFIG } from "../utils/config.js";
  */
 export function createComboTools(
   server: McpServer,
-  device: ButtplugClientDevice,
+  device: Device,
   deviceVersion: SamNeoVersion,
 ) {
   server.tool(
@@ -77,8 +75,9 @@ export function createComboTools(
         `Starting combo: duration=${duration}ms, mode=${syncMode}, v=${vibrationPower}, vac=${vacuumIntensity}`,
       );
 
-      // Start a new orchestration session
+      // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
+      engine.stopAll();
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVibration, vibrationPower, "vibration");
@@ -87,149 +86,80 @@ export function createComboTools(
       // Synchronously update the tracked state
       updateState(vibrationPower, vacuumIntensity);
 
-      const diff = 1 / steps;
-      const delay = duration / steps;
+      const safeVib = enforceVibration(vibrationPower);
+      const safeVac = enforceVacuum(vacuumIntensity);
+
+      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
+      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
+      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
 
       try {
-        // SYNC STEP: Prime BOTH immediately
-        await setCombined(
-          device,
-          deviceVersion,
-          enforceVibration(0.1),
-          enforceVacuum(0.1),
-        );
+        const vibrationKeyframes: Keyframe[] = [];
+        const vacuumKeyframes: Keyframe[] = [];
 
-        // Background sequence
-        (async () => {
-          try {
-            if (syncMode === "synchronized") {
-              for (let i = 1; i < steps; i++) {
-                if (signal.aborted) return;
-                await new Promise((resolve) => setTimeout(resolve, delay));
-                if (signal.aborted) return;
+        if (syncMode === "synchronized") {
+          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+          vacuumKeyframes.push({ duration: 0, value: enforceVacuum(0.1) });
 
-                const intensity = diff * i;
-                await setCombined(
-                  device,
-                  deviceVersion,
-                  enforceVibration(intensity * vibrationPower),
-                  enforceVacuum(intensity * vacuumIntensity),
-                );
-              }
-            } else if (syncMode === "alternating") {
-              for (let i = 1; i < steps; i++) {
-                if (signal.aborted) return;
-                await new Promise((resolve) => setTimeout(resolve, delay));
-                if (signal.aborted) return;
+          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+          vacuumKeyframes.push({ duration: duration, value: safeVac, easing: "linear" });
+          
+        } else if (syncMode === "alternating") {
+          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+          vacuumKeyframes.push({ duration: 0, value: safeVac });
 
-                const intensity = diff * i;
-                await setCombined(
-                  device,
-                  deviceVersion,
-                  enforceVibration(intensity * vibrationPower),
-                  enforceVacuum((1 - intensity) * vacuumIntensity),
-                );
-              }
-            } else if (syncMode === "independent") {
-              // Parallel execution for independent patterns
-              const vibPromise = (async () => {
-                for (let i = 1; i < steps; i++) {
-                  if (signal.aborted) return;
-                  await new Promise((resolve) => setTimeout(resolve, delay));
-                  if (signal.aborted) return;
+          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+          vacuumKeyframes.push({ duration: duration, value: 0, easing: "linear" });
 
-                  const intensity = diff * i;
-                  await setVibration(
-                    device,
-                    deviceVersion,
-                    enforceVibration(intensity * vibrationPower),
-                  );
-                }
-              })();
+        } else if (syncMode === "independent") {
+          // Vibration ramps up
+          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
 
-              const vacPromise = (async () => {
-                if (vacuumPattern === "constant") {
-                  if (signal.aborted) return;
-                  await setVacuum(
-                    device,
-                    deviceVersion,
-                    enforceVacuum(vacuumIntensity),
-                  );
-                  await new Promise((resolve) => setTimeout(resolve, duration));
-                } else if (vacuumPattern === "pulse") {
-                  const pInterval = 500;
-                  const cycles = Math.floor(duration / (pInterval * 2));
-                  for (let i = 0; i < cycles; i++) {
-                    if (signal.aborted) return;
-                    await new Promise((resolve) =>
-                      setTimeout(resolve, pInterval),
-                    );
-                    if (signal.aborted) return;
-
-                    await setVacuum(device, deviceVersion, 0);
-                    if (signal.aborted) return;
-
-                    await new Promise((resolve) =>
-                      setTimeout(resolve, pInterval),
-                    );
-                    if (signal.aborted) return;
-
-                    if (i < cycles - 1) {
-                      await setVacuum(
-                        device,
-                        deviceVersion,
-                        enforceVacuum(vacuumIntensity),
-                      );
-                    }
-                  }
-                } else if (vacuumPattern === "wave") {
-                  const sCount = 20;
-                  const sDelay = duration / (sCount * 2);
-                  for (let i = 1; i <= sCount; i++) {
-                    if (signal.aborted) return;
-                    await new Promise((resolve) => setTimeout(resolve, sDelay));
-                    if (signal.aborted) return;
-
-                    await setVacuum(
-                      device,
-                      deviceVersion,
-                      enforceVacuum((i / sCount) * vacuumIntensity),
-                    );
-                  }
-                  for (let i = sCount; i >= 0; i--) {
-                    if (signal.aborted) return;
-                    await new Promise((resolve) => setTimeout(resolve, sDelay));
-                    if (signal.aborted) return;
-
-                    await setVacuum(
-                      device,
-                      deviceVersion,
-                      enforceVacuum((i / sCount) * vacuumIntensity),
-                    );
-                  }
-                }
-              })();
-
-              await Promise.all([vibPromise, vacPromise]);
+          // Vacuum follows its independent pattern logic
+          if (vacuumPattern === "constant") {
+            vacuumKeyframes.push({ duration: duration, value: safeVac });
+          } else if (vacuumPattern === "pulse") {
+            const pInterval = 500;
+            const cycles = Math.floor(duration / (pInterval * 2));
+            for (let i = 0; i < cycles; i++) {
+              vacuumKeyframes.push({ duration: pInterval, value: safeVac, easing: "step" });
+              vacuumKeyframes.push({ duration: pInterval, value: 0, easing: "step" });
             }
-
-            // Final stop - only if not aborted
-            if (!signal.aborted) {
-              await stopAll(device);
-              debugLog("ComboTool", "Sequence completed.");
-            }
-          } catch (e) {
-            if (!signal.aborted) {
-              errorLog("ComboTool", "Background loop error:", e);
-            }
+          } else if (vacuumPattern === "wave") {
+            vacuumKeyframes.push({ duration: duration / 2, value: safeVac, easing: "easeInOut" });
+            vacuumKeyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
           }
-        })();
+        }
+
+        // Play the multi-track pattern simultaneously
+        const id = await engine.play(device.index, [
+          {
+            featureIndex: 0,
+            outputType: "Vibrate",
+            keyframes: vibrationKeyframes,
+          },
+          {
+            featureIndex: vacuumFeatureIndex,
+            outputType: vacuumOutputType,
+            keyframes: vacuumKeyframes,
+          }
+        ]);
+
+        // Stop the engine pattern after duration
+        setTimeout(() => {
+          if (!signal.aborted) {
+            engine.stop(id);
+            stopAll(device); // Reset levels to 0
+            debugLog("ComboTool", "Sequence completed.");
+          }
+        }, duration);
 
         return {
           content: [
             {
               type: "text",
-              text: `Started combination sequence (${syncMode}, ${duration}ms). ${getStateSummary()}`,
+              text: `Started pattern engine combination sequence (${syncMode}, ${duration}ms). ${getStateSummary()}`,
             },
           ],
         };

@@ -1,11 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ButtplugClientDevice } from "buttplug";
+import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
-  type SamNeoVersion,
+  SamNeoVersion,
   deviceState,
-  setVacuum,
-  setVibration,
+  stopAll,
   updateState,
   startNewSession,
   getStateSummary,
@@ -13,6 +12,7 @@ import {
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
+import { engine } from "../index.js";
 
 /**
  * Registers the Vacuum/Suction tool with the MCP server.
@@ -20,7 +20,7 @@ import { CONFIG } from "../utils/config.js";
  */
 export function createVacuumTools(
   server: McpServer,
-  device: ButtplugClientDevice,
+  device: Device,
   deviceVersion: SamNeoVersion,
 ) {
   server.tool(
@@ -60,8 +60,9 @@ export function createVacuumTools(
         `Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}`,
       );
 
-      // Start a new orchestration session
+      // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
+      engine.stopAll();
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVacuum, intensity, "vacuum");
@@ -71,92 +72,58 @@ export function createVacuumTools(
 
       const safeIntensity = enforceVacuum(intensity);
 
+      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
+      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
+      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+
       try {
-        // SYNC STEP: Prime the motor
-        // Also ensure vibration is SILENCED for this exclusive vacuum session
-        const primeLevel = pattern === "wave" ? 0.2 : safeIntensity;
-        await setVacuum(device, deviceVersion, primeLevel);
-        await setVibration(device, deviceVersion, 0);
+        const keyframes: Keyframe[] = [];
 
-        // Background sequence
-        (async () => {
-          try {
-            if (pattern === "constant") {
-              await new Promise((resolve) => setTimeout(resolve, duration));
-            } else if (pattern === "pulse") {
-              const cycles = Math.floor(duration / (pulseInterval * 2));
-              for (let i = 0; i < cycles; i++) {
-                if (signal.aborted) return;
+        if (pattern === "constant") {
+          keyframes.push({ duration: duration, value: safeIntensity });
+        } else if (pattern === "pulse") {
+          // Sharp on/off transitions
+          keyframes.push({ duration: pulseInterval, value: safeIntensity, easing: "step" });
+          keyframes.push({ duration: pulseInterval, value: 0, easing: "step" });
+        } else if (pattern === "wave") {
+          // Smooth sweeping interpolation
+          keyframes.push({ duration: duration / 2, value: safeIntensity, easing: "easeInOut" });
+          keyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
+        }
 
-                await new Promise((resolve) =>
-                  setTimeout(resolve, pulseInterval),
-                );
-                if (signal.aborted) return;
-
-                await setVacuum(device, deviceVersion, 0);
-                if (signal.aborted) return;
-
-                await new Promise((resolve) =>
-                  setTimeout(resolve, pulseInterval),
-                );
-                if (signal.aborted) return;
-
-                if (i < cycles - 1) {
-                  await setVacuum(device, deviceVersion, safeIntensity);
-                }
-              }
-            } else if (pattern === "wave") {
-              const steps = 20;
-              const stepDuration = duration / (steps * 2);
-
-              // Wave Up
-              for (let i = 1; i <= steps; i++) {
-                if (signal.aborted) return;
-                await new Promise((resolve) =>
-                  setTimeout(resolve, stepDuration),
-                );
-                if (signal.aborted) return;
-
-                await setVacuum(
-                  device,
-                  deviceVersion,
-                  enforceVacuum((i / steps) * intensity),
-                );
-              }
-
-              // Wave Down
-              for (let i = steps; i >= 0; i--) {
-                if (signal.aborted) return;
-                await new Promise((resolve) =>
-                  setTimeout(resolve, stepDuration),
-                );
-                if (signal.aborted) return;
-
-                await setVacuum(
-                  device,
-                  deviceVersion,
-                  enforceVacuum((i / steps) * intensity),
-                );
-              }
+        // Fire the pattern through the engine
+        const id = await engine.play(
+          device.index,
+          [
+            {
+              featureIndex: vacuumFeatureIndex,
+              outputType: vacuumOutputType,
+              keyframes: keyframes,
+            },
+            // Explicitly map vibration track to 0 to silence it during exclusive vacuum session
+            {
+              featureIndex: 0,
+              outputType: "Vibrate",
+              keyframes: [{ duration: duration, value: 0 }],
             }
+          ],
+          { loop: pattern !== "constant" }
+        );
 
-            // Final stop - only if not aborted
-            if (!signal.aborted) {
-              await setVacuum(device, deviceVersion, 0);
-              debugLog("VacuumTool", "Sequence completed.");
-            }
-          } catch (e) {
-            if (!signal.aborted) {
-              errorLog("VacuumTool", "Background loop error:", e);
-            }
+        // Stop the engine pattern after duration
+        setTimeout(() => {
+          if (!signal.aborted) {
+            engine.stop(id);
+            stopAll(device); // Reset levels to 0
+            debugLog("VacuumTool", "Sequence completed.");
           }
-        })();
+        }, duration);
 
         return {
           content: [
             {
               type: "text",
-              text: `Started vacuum operation (${pattern}, ${duration}ms). ${getStateSummary()}`,
+              text: `Started pattern engine vacuum operation (${pattern}, ${duration}ms). ${getStateSummary()}`,
             },
           ],
         };

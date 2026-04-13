@@ -3,9 +3,9 @@
  */
 export const CONFIG = {
   /**
-   * Application version.
+   * The version of the MCP Server (Sync with package.json)
    */
-  VERSION: "1.2.3",
+  VERSION: "1.3.0",
 
   /**
    * When HARD_MODE is true:
