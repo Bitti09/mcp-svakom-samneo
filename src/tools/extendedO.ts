@@ -4,15 +4,16 @@ import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
   SamNeoVersion,
   deviceState,
-  stopAll,
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Extended O tool with the MCP server.
@@ -21,7 +22,7 @@ import { engine } from "../index.js";
 export function createExtendedOTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-ExtendedO",
@@ -59,6 +60,12 @@ export function createExtendedOTools(
         .max(0.3)
         .default(0.1)
         .describe("Low intensity level to drop to."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, its intensity is used as the restore target instead of currentVibration/currentVacuum.",
+        ),
     },
 
     async ({
@@ -67,18 +74,42 @@ export function createExtendedOTools(
       holdDuration,
       restoreDuration,
       minimumLevel,
+      customPattern,
     }) => {
       debugLog(
         "ExtendedO",
         `Starting Extended O: drop to ${minimumLevel}, hold=${holdDuration}ms, restore=${restoreDuration}ms`,
       );
 
-      // Start a new orchestration session
-      const signal = startNewSession();
+      // Start a new orchestration session (aborts any previous one)
+      startNewSession();
       engine.stopAll();
 
-      const targetVibrate = currentVibration ?? deviceState.lastVibration;
-      const targetVacuum = currentVacuum ?? deviceState.lastVacuum;
+      // Resolve custom pattern intensity targets if a pattern name was supplied
+      let resolvedVibration = currentVibration;
+      let resolvedVacuum = currentVacuum;
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        // Use the pattern's global intensity scaler as the restore target for both actuators.
+        // The user can still override either value via currentVibration / currentVacuum.
+        const patternTarget = entry.intensity ?? 0.5;
+        resolvedVibration = currentVibration ?? patternTarget;
+        resolvedVacuum = currentVacuum ?? patternTarget;
+      }
+
+      const targetVibrate = resolvedVibration ?? deviceState.lastVibration;
+      const targetVacuum = resolvedVacuum ?? deviceState.lastVacuum;
 
       // AI SAFETY: Prevent extreme jolts if starting from null/zero
       validateTransition(deviceState.lastVibration, targetVibrate, "vibration");
@@ -87,9 +118,7 @@ export function createExtendedOTools(
       // Synchronously update tracked intensities
       updateState(targetVibrate, targetVacuum);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const vibrationKeyframes: Keyframe[] = [];
@@ -112,12 +141,12 @@ export function createExtendedOTools(
         // Fire the pattern through the engine
         await engine.play(device.index, [
           {
-            featureIndex: 0,
+            featureIndex: vibrateIndex,
             outputType: "Vibrate",
             keyframes: vibrationKeyframes,
           },
           {
-            featureIndex: vacuumFeatureIndex,
+            featureIndex: vacuumIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }

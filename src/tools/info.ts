@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type Device } from "@zendrex/buttplug.js";
 import { type SamNeoVersion, deviceState } from "../utils/hardware.js";
 import { errorLog } from "../utils/logger.js";
+import { listPatterns } from "../utils/patternRegistry.js";
 
 /**
  * Registers informational tools with the MCP server.
@@ -22,7 +23,7 @@ export function createInfoTools(
         if (hasBattery) {
           try {
             batteryLevel = await device.readSensor("Battery");
-          } catch (_e) {
+          } catch {
             // Ignore error if battery read fails
           }
         }
@@ -60,6 +61,7 @@ export function createInfoTools(
               : "Battery reporting not supported by this hardware",
             conclusion: `Hardware recognized. Outputs supported: ${outputs.join(", ")}.`,
           },
+          availableCustomPatterns: listPatterns(),
         };
 
         return {

@@ -8,11 +8,13 @@ import {
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Combo tool with the MCP server.
@@ -21,7 +23,7 @@ import { engine } from "../index.js";
 export function createComboTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-Combo",
@@ -60,15 +62,22 @@ export function createComboTools(
         .enum(["constant", "pulse", "wave"])
         .default("constant")
         .describe("Vacuum pattern for independent mode."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, plays that pattern for 'duration' ms instead of the built-in sync/alternating/independent modes.",
+        ),
     },
 
     async ({
       duration,
-      steps,
+      steps: _steps,
       vibrationPower,
       vacuumIntensity,
       syncMode,
       vacuumPattern,
+      customPattern,
     }) => {
       debugLog(
         "ComboTool",
@@ -78,6 +87,58 @@ export function createComboTools(
       // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
       engine.stopAll();
+
+      // --- Custom pattern branch ---
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const patternIntensity = entry.intensity ?? Math.max(vibrationPower, vacuumIntensity);
+        try {
+          validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
+          validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+          updateState(patternIntensity, patternIntensity);
+
+          const id = await engine.play(
+            device.index,
+            entry.tracks,
+            { loop: entry.loop, intensity: entry.intensity, timeout: duration },
+          );
+
+          setTimeout(() => {
+            if (!signal.aborted) {
+              engine.stop(id);
+              stopAll(device);
+              debugLog("ComboTool", "Custom pattern sequence completed.");
+            }
+          }, duration);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Started custom pattern "${customPattern}" as combo (${duration}ms). ${getStateSummary()}`,
+              },
+            ],
+          };
+        } catch (e) {
+          errorLog("ComboTool", "Failed to start custom pattern:", e);
+          return {
+            content: [{ type: "text", text: `Error starting custom pattern: ${e}` }],
+            isError: true,
+          };
+        }
+      }
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVibration, vibrationPower, "vibration");
@@ -89,9 +150,7 @@ export function createComboTools(
       const safeVib = enforceVibration(vibrationPower);
       const safeVac = enforceVacuum(vacuumIntensity);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const vibrationKeyframes: Keyframe[] = [];
@@ -135,12 +194,12 @@ export function createComboTools(
         // Play the multi-track pattern simultaneously
         const id = await engine.play(device.index, [
           {
-            featureIndex: 0,
+            featureIndex: vibrateIndex,
             outputType: "Vibrate",
             keyframes: vibrationKeyframes,
           },
           {
-            featureIndex: vacuumFeatureIndex,
+            featureIndex: vacuumIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }

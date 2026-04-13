@@ -5,9 +5,6 @@ import { debugLog } from "./logger.js";
 let activeController: AbortController | null = null;
 let globalDevice: Device | null = null;
 
-// Replaced by Zendrex PatternEngine orchestration
-// Direct target state mapping handles simple static output now
-
 /**
  * Starts a new stimulation session, instantly aborting any previous one.
  * Returns an AbortSignal that background loops must respect.
@@ -28,6 +25,21 @@ export enum SamNeoVersion {
   ORIGINAL = "original",
   NEO2_SERIES = "neo2_series", // Covers both Neo2 and Neo2 Pro
 }
+
+/**
+ * Cached feature-index map discovered at startup from the device's Spec v4 feature map.
+ * Allows tools to route PatternEngine tracks to the correct actuator without hardcoding.
+ */
+export interface HardwareMap {
+  /** Feature index of the vibration actuator. */
+  vibrateIndex: number;
+  /** Feature index of the vacuum/suction actuator. */
+  vacuumIndex: number;
+  /** Output type for the vacuum actuator ("Constrict" on Neo2, "Vibrate" on Original). */
+  vacuumOutputType: "Constrict" | "Vibrate";
+}
+
+let cachedHwMap: HardwareMap | null = null;
 
 /**
  * Tracks the last sent intensity levels to allow stateful tools to function.
@@ -61,16 +73,61 @@ export function getStateSummary(): string {
 }
 
 /**
- * Initializes the hardware cache for the connected device.
- * Called once during startup in index.ts.
+ * Initializes the hardware by discovering and caching the device's Spec v4 feature-index map.
+ * Called once during startup in index.ts. The resulting map is used by tools to route
+ * PatternEngine tracks to the correct actuator indices.
  */
 export function initializeHardware(
   device: Device,
   version: SamNeoVersion,
 ) {
-  debugLog("Hardware", `🔌 Initializing hardware mapping for ${device.displayName ?? device.name}...`);
+  debugLog("Hardware", `🔌 Discovering feature map for ${device.displayName ?? device.name}...`);
   globalDevice = device;
-  debugLog("Hardware", `✅ Mapping built for ${version}.`);
+
+  const outputs = device.features.outputs;
+
+  if (version === SamNeoVersion.NEO2_SERIES) {
+    const vibrateFeature = outputs.find((f) => f.type === "Vibrate");
+    const constrictFeature = outputs.find((f) => f.type === "Constrict");
+    if (!vibrateFeature) {
+      throw new Error(`initializeHardware: device "${device.displayName ?? device.name}" is missing a Vibrate output feature.`);
+    }
+    if (!constrictFeature) {
+      throw new Error(`initializeHardware: device "${device.displayName ?? device.name}" is missing a Constrict output feature for Neo2.`);
+    }
+    cachedHwMap = {
+      vibrateIndex: vibrateFeature.index,
+      vacuumIndex: constrictFeature.index,
+      vacuumOutputType: "Constrict",
+    };
+  } else {
+    // Original Sam Neo: twin vibrators — first is vibration, second drives vacuum suction
+    const vibrateFeatures = outputs.filter((f) => f.type === "Vibrate");
+    if (vibrateFeatures.length < 2) {
+      throw new Error(`initializeHardware: Original Sam Neo requires 2 Vibrate features; found ${vibrateFeatures.length}.`);
+    }
+    cachedHwMap = {
+      vibrateIndex: vibrateFeatures[0]!.index,
+      vacuumIndex: vibrateFeatures[1]!.index,
+      vacuumOutputType: "Vibrate",
+    };
+  }
+
+  debugLog(
+    "Hardware",
+    `✅ Feature map: vibrate[${cachedHwMap.vibrateIndex}], vacuum[${cachedHwMap.vacuumIndex}](${cachedHwMap.vacuumOutputType})`,
+  );
+}
+
+/**
+ * Returns the cached hardware feature-index map.
+ * Throws if called before `initializeHardware`.
+ */
+export function getHardwareMap(): HardwareMap {
+  if (!cachedHwMap) {
+    throw new Error("Hardware not initialized. Call initializeHardware() first.");
+  }
+  return cachedHwMap;
 }
 
 /**

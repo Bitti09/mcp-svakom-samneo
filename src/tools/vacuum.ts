@@ -8,11 +8,13 @@ import {
   updateState,
   startNewSession,
   getStateSummary,
+  getHardwareMap,
 } from "../utils/hardware.js";
 import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getPattern } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Vacuum/Suction tool with the MCP server.
@@ -21,7 +23,7 @@ import { engine } from "../index.js";
 export function createVacuumTools(
   server: McpServer,
   device: Device,
-  deviceVersion: SamNeoVersion,
+  _deviceVersion: SamNeoVersion,
 ) {
   server.tool(
     "Svakom-Sam-Neo-Vacuum",
@@ -52,9 +54,15 @@ export function createVacuumTools(
         .default(500)
         .optional()
         .describe("Interval for pulse pattern (ms)."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, plays that pattern for 'duration' ms instead of the built-in pattern.",
+        ),
     },
 
-    async ({ intensity, duration, pattern, pulseInterval = 500 }) => {
+    async ({ intensity, duration, pattern, pulseInterval = 500, customPattern }) => {
       debugLog(
         "VacuumTool",
         `Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}`,
@@ -64,6 +72,57 @@ export function createVacuumTools(
       const signal = startNewSession();
       engine.stopAll();
 
+      // --- Custom pattern branch ---
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const patternIntensity = entry.intensity ?? intensity;
+        try {
+          validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+          updateState(undefined, patternIntensity);
+
+          const id = await engine.play(
+            device.index,
+            entry.tracks,
+            { loop: entry.loop, intensity: entry.intensity, timeout: duration },
+          );
+
+          setTimeout(() => {
+            if (!signal.aborted) {
+              engine.stop(id);
+              stopAll(device);
+              debugLog("VacuumTool", "Custom pattern sequence completed.");
+            }
+          }, duration);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Started custom pattern "${customPattern}" on vacuum (${duration}ms). ${getStateSummary()}`,
+              },
+            ],
+          };
+        } catch (e) {
+          errorLog("VacuumTool", "Failed to start custom pattern:", e);
+          return {
+            content: [{ type: "text", text: `Error starting custom pattern: ${e}` }],
+            isError: true,
+          };
+        }
+      }
+
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVacuum, intensity, "vacuum");
 
@@ -72,9 +131,7 @@ export function createVacuumTools(
 
       const safeIntensity = enforceVacuum(intensity);
 
-      const isNeo2 = deviceVersion === SamNeoVersion.NEO2_SERIES;
-      const vacuumFeatureIndex = isNeo2 ? 0 : 1;
-      const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
+      const { vibrateIndex, vacuumIndex, vacuumOutputType } = getHardwareMap();
 
       try {
         const keyframes: Keyframe[] = [];
@@ -96,13 +153,13 @@ export function createVacuumTools(
           device.index,
           [
             {
-              featureIndex: vacuumFeatureIndex,
+              featureIndex: vacuumIndex,
               outputType: vacuumOutputType,
               keyframes: keyframes,
             },
             // Explicitly map vibration track to 0 to silence it during exclusive vacuum session
             {
-              featureIndex: 0,
+              featureIndex: vibrateIndex,
               outputType: "Vibrate",
               keyframes: [{ duration: duration, value: 0 }],
             }
