@@ -14,6 +14,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getPattern, toDescriptor } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Combo tool with the MCP server.
@@ -61,6 +62,12 @@ export function createComboTools(
         .enum(["constant", "pulse", "wave"])
         .default("constant")
         .describe("Vacuum pattern for independent mode."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, plays that pattern for 'duration' ms instead of the built-in sync/alternating/independent modes.",
+        ),
     },
 
     async ({
@@ -70,6 +77,7 @@ export function createComboTools(
       vacuumIntensity,
       syncMode,
       vacuumPattern,
+      customPattern,
     }) => {
       debugLog(
         "ComboTool",
@@ -79,6 +87,54 @@ export function createComboTools(
       // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
       engine.stopAll();
+
+      // --- Custom pattern branch ---
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const patternIntensity = entry.intensity ?? Math.max(vibrationPower, vacuumIntensity);
+        validateTransition(deviceState.lastVibration, patternIntensity, "vibration");
+        validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+        updateState(patternIntensity, patternIntensity);
+
+        try {
+          const id = await engine.play(device.index, toDescriptor(entry), { timeout: duration });
+
+          setTimeout(() => {
+            if (!signal.aborted) {
+              engine.stop(id);
+              stopAll(device);
+              debugLog("ComboTool", "Custom pattern sequence completed.");
+            }
+          }, duration);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Started custom pattern "${customPattern}" as combo (${duration}ms). ${getStateSummary()}`,
+              },
+            ],
+          };
+        } catch (e) {
+          errorLog("ComboTool", "Failed to start custom pattern:", e);
+          return {
+            content: [{ type: "text", text: `Error starting custom pattern: ${e}` }],
+            isError: true,
+          };
+        }
+      }
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVibration, vibrationPower, "vibration");

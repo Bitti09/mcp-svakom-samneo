@@ -14,6 +14,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getPattern, toDescriptor } from "../utils/patternRegistry.js";
 
 /**
  * Registers the Vacuum/Suction tool with the MCP server.
@@ -53,9 +54,15 @@ export function createVacuumTools(
         .default(500)
         .optional()
         .describe("Interval for pulse pattern (ms)."),
+      customPattern: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a custom pattern loaded via LoadPattern. When provided, plays that pattern for 'duration' ms instead of the built-in pattern.",
+        ),
     },
 
-    async ({ intensity, duration, pattern, pulseInterval = 500 }) => {
+    async ({ intensity, duration, pattern, pulseInterval = 500, customPattern }) => {
       debugLog(
         "VacuumTool",
         `Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}`,
@@ -64,6 +71,53 @@ export function createVacuumTools(
       // Start a new orchestration session and clear any running engine patterns
       const signal = startNewSession();
       engine.stopAll();
+
+      // --- Custom pattern branch ---
+      if (customPattern !== undefined) {
+        const entry = getPattern(customPattern);
+        if (!entry) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Unknown custom pattern: "${customPattern}". Load it first with Svakom-Sam-Neo-LoadPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const patternIntensity = entry.intensity ?? intensity;
+        validateTransition(deviceState.lastVacuum, patternIntensity, "vacuum");
+        updateState(undefined, patternIntensity);
+
+        try {
+          const id = await engine.play(device.index, toDescriptor(entry), { timeout: duration });
+
+          setTimeout(() => {
+            if (!signal.aborted) {
+              engine.stop(id);
+              stopAll(device);
+              debugLog("VacuumTool", "Custom pattern sequence completed.");
+            }
+          }, duration);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Started custom pattern "${customPattern}" on vacuum (${duration}ms). ${getStateSummary()}`,
+              },
+            ],
+          };
+        } catch (e) {
+          errorLog("VacuumTool", "Failed to start custom pattern:", e);
+          return {
+            content: [{ type: "text", text: `Error starting custom pattern: ${e}` }],
+            isError: true,
+          };
+        }
+      }
 
       // AI SAFETY: Prevent extreme jolts
       validateTransition(deviceState.lastVacuum, intensity, "vacuum");
