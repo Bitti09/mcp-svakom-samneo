@@ -133,6 +133,10 @@ Automated test suite (Vitest):
 
 ---
 
+## Disclaimer
+
+This project is an **independent, third-party fork** and is not affiliated with, authorized, maintained, sponsored, or endorsed by **Svakom** or any of its affiliates or subsidiaries. The name "Svakom" as well as related names, marks, emblems, and images are registered trademarks of their respective owners. This MCP server is intended for personal use and developer experimentation via the Buttplug.io protocol.
+
 ## Credits
 - **Original Project**: [Kyure-A/mcp-svakom-samneo](https://github.com/Kyure-A/mcp-svakom-samneo)
 - **Implementation Note**: Logic refactoring and Spec v4 migration assisted by Gemini.
