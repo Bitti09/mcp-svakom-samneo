@@ -5,7 +5,7 @@ export const CONFIG = {
   /**
    * Application version.
    */
-  VERSION: "1.2.1",
+  VERSION: "1.2.3",
 
   /**
    * When HARD_MODE is true:
