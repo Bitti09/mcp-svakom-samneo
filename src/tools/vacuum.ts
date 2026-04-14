@@ -13,10 +13,11 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getVacuumPattern } from "./customPatterns.js";
 
 /**
  * Registers the Vacuum/Suction tool with the MCP server.
- * Supports constant, pulse, and wave suction patterns.
+ * Supports constant, pulse, and wave suction patterns, plus user-imported custom patterns.
  */
 export function createVacuumTools(
   server: McpServer,
@@ -52,9 +53,15 @@ export function createVacuumTools(
         .default(500)
         .optional()
         .describe("Interval for pulse pattern (ms)."),
+      patternName: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a previously imported custom vacuum pattern. When provided, overrides the built-in pattern keyframes.",
+        ),
     },
 
-    async ({ intensity, duration, pattern, pulseInterval = 500 }) => {
+    async ({ intensity, duration, pattern, pulseInterval = 500, patternName }) => {
       debugLog(
         "VacuumTool",
         `Starting vacuum: intensity=${intensity}, duration=${duration}ms, pattern=${pattern}`,
@@ -76,19 +83,43 @@ export function createVacuumTools(
       const vacuumFeatureIndex = isNeo2 ? 0 : 1;
       const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
 
-      try {
-        const keyframes: Keyframe[] = [];
+      // Use a custom pattern if requested
+      const customPattern = patternName ? getVacuumPattern(patternName) : undefined;
+      if (patternName && !customPattern) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Custom vacuum pattern "${patternName}" not found. Import it first with Svakom-Sam-Neo-ImportPattern.`,
+            },
+          ],
+          isError: true,
+        };
+      }
 
-        if (pattern === "constant") {
-          keyframes.push({ duration: duration, value: safeIntensity });
-        } else if (pattern === "pulse") {
-          // Sharp on/off transitions
-          keyframes.push({ duration: pulseInterval, value: safeIntensity, easing: "step" });
-          keyframes.push({ duration: pulseInterval, value: 0, easing: "step" });
-        } else if (pattern === "wave") {
-          // Smooth sweeping interpolation
-          keyframes.push({ duration: duration / 2, value: safeIntensity, easing: "easeInOut" });
-          keyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
+      try {
+        let keyframes: Keyframe[];
+        let useLoop = false;
+
+        if (customPattern) {
+          keyframes = customPattern.keyframes;
+        } else {
+          keyframes = [];
+
+          if (pattern === "constant") {
+            keyframes.push({ duration: duration, value: safeIntensity });
+          } else if (pattern === "pulse") {
+            // Build full cycles that fill the duration
+            const cycles = Math.max(1, Math.floor(duration / (pulseInterval * 2)));
+            for (let i = 0; i < cycles; i++) {
+              keyframes.push({ duration: pulseInterval, value: safeIntensity, easing: "step" });
+              keyframes.push({ duration: pulseInterval, value: 0, easing: "step" });
+            }
+          } else if (pattern === "wave") {
+            // Smooth sweeping interpolation
+            keyframes.push({ duration: duration / 2, value: safeIntensity, easing: "easeInOut" });
+            keyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
+          }
         }
 
         // Fire the pattern through the engine
@@ -105,9 +136,9 @@ export function createVacuumTools(
               featureIndex: 0,
               outputType: "Vibrate",
               keyframes: [{ duration: duration, value: 0 }],
-            }
+            },
           ],
-          { loop: pattern !== "constant" }
+          useLoop ? { loop: true } : undefined,
         );
 
         // Stop the engine pattern after duration
@@ -123,7 +154,16 @@ export function createVacuumTools(
           content: [
             {
               type: "text",
-              text: `Started pattern engine vacuum operation (${pattern}, ${duration}ms). ${getStateSummary()}`,
+              text: JSON.stringify(
+                {
+                  patternType: "vacuum",
+                  status: `Started vacuum operation (${patternName ? `custom:${patternName}` : pattern}, ${duration}ms).`,
+                  customPattern: patternName ?? null,
+                  state: getStateSummary(),
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
