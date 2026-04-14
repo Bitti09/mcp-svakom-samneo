@@ -6,8 +6,8 @@ import {
   setVibration,
   setVacuum,
   deviceState,
+  startNewSession,
 } from "../src/utils/hardware.js";
-import { OutputType } from "buttplug";
 
 describe("Sam Neo v4 Hardware Tests", () => {
   let mockDevice: any;
@@ -17,37 +17,24 @@ describe("Sam Neo v4 Hardware Tests", () => {
     deviceState.lastVibration = 0;
     deviceState.lastVacuum = 0;
 
-    // Create a mock Sam Neo 2 Pro (v4)
-    const mockFeatures = new Map();
-    
-    // Feature 0: Vibrate
-    mockFeatures.set(0, {
-      hasOutput: (type: OutputType) => type === OutputType.Vibrate,
-      runOutput: vi.fn().mockResolvedValue(undefined),
-    });
-
-    // Feature 1: Constrict
-    mockFeatures.set(1, {
-      hasOutput: (type: OutputType) => type === OutputType.Constrict,
-      runOutput: vi.fn().mockResolvedValue(undefined),
-    });
-
+    // Create a mock Sam Neo 2 Pro (v4) using the @zendrex/buttplug.js Device API
     mockDevice = {
       name: "Svakom Sam Neo 2 Pro",
-      features: mockFeatures,
-      hasOutput: (type: OutputType) => 
-        type === OutputType.Vibrate || type === OutputType.Constrict,
+      displayName: "Svakom Sam Neo 2 Pro",
+      index: 0,
+      // @zendrex/buttplug.js uses canOutput(type) instead of hasOutput
+      canOutput: (type: string) => type === "Vibrate" || type === "Constrict",
+      vibrate: vi.fn().mockResolvedValue(undefined),
+      constrict: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
     };
   });
 
   it("should correctly detect Sam Neo 2 Pro (v4) version", () => {
     const mockNeo2 = {
       name: "Sam Neo 2 Pro",
-      features: new Map([
-        [0, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-        [1, { hasOutput: (t: OutputType) => t === OutputType.Constrict }],
-      ]),
-      hasOutput: (t: OutputType) => t === OutputType.Vibrate || t === OutputType.Constrict,
+      displayName: "Sam Neo 2 Pro",
+      canOutput: (t: string) => t === "Vibrate" || t === "Constrict",
     };
     const version = detectSamNeoVersion(mockNeo2 as any);
     console.log(`✅ Result: Detected version [${version}] for device [${mockNeo2.name}]`);
@@ -57,11 +44,8 @@ describe("Sam Neo v4 Hardware Tests", () => {
   it("should correctly detect Original Sam Neo version", () => {
     const mockOriginal = {
       name: "Sam Neo",
-      features: new Map([
-        [0, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-        [1, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-      ]),
-      hasOutput: (t: OutputType) => t === OutputType.Vibrate,
+      displayName: "Sam Neo",
+      canOutput: (t: string) => t === "Vibrate",
     };
     const version = detectSamNeoVersion(mockOriginal as any);
     console.log(`✅ Result: Detected version [${version}] for device [${mockOriginal.name}]`);
@@ -71,13 +55,10 @@ describe("Sam Neo v4 Hardware Tests", () => {
   it("should reject other dual-vibrator Svakom devices (Vick Neo 2)", () => {
     const mockVick = {
       name: "Svakom Vick Neo 2",
-      features: new Map([
-        [0, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-        [1, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-      ]),
-      hasOutput: (t: OutputType) => t === OutputType.Vibrate,
+      displayName: "Svakom Vick Neo 2",
+      canOutput: (t: string) => t === "Vibrate",
     };
-    
+
     try {
       detectSamNeoVersion(mockVick as any);
     } catch (e: any) {
@@ -90,13 +71,10 @@ describe("Sam Neo v4 Hardware Tests", () => {
   it("should throw error for unsupported hardware (Svakom Alex Neo)", () => {
     const mockAlexNeo = {
       name: "Svakom Alex Neo",
-      features: new Map([
-        [0, { hasOutput: (t: OutputType) => t === OutputType.Vibrate }],
-        [1, { hasOutput: (t: OutputType) => t === OutputType.Oscillate }],
-      ]),
-      hasOutput: (t: OutputType) => t === OutputType.Vibrate || t === OutputType.Oscillate,
+      displayName: "Svakom Alex Neo",
+      canOutput: (t: string) => t === "Vibrate" || t === "Oscillate",
     };
-    
+
     try {
       detectSamNeoVersion(mockAlexNeo as any);
     } catch (e: any) {
@@ -116,21 +94,46 @@ describe("Sam Neo v4 Hardware Tests", () => {
 
   it("should route vibration to the correct v4 actuator", async () => {
     initializeHardware(mockDevice, SamNeoVersion.NEO2_SERIES);
-    
+
     await setVibration(mockDevice, SamNeoVersion.NEO2_SERIES, 0.5);
-    
-    const vibFeature = mockDevice.features.get(0);
-    expect(vibFeature.runOutput).toHaveBeenCalled();
-    expect(deviceState.lastVibration).toBe(0.5);
+
+    expect(mockDevice.vibrate).toHaveBeenCalledWith(0.5);
+    // setVibration does not update deviceState; that is updateState's responsibility
   });
 
   it("should route vacuum to the constrictor actuator on v4", async () => {
     initializeHardware(mockDevice, SamNeoVersion.NEO2_SERIES);
-    
+
     await setVacuum(mockDevice, SamNeoVersion.NEO2_SERIES, 0.8);
-    
-    const vacFeature = mockDevice.features.get(1);
-    expect(vacFeature.runOutput).toHaveBeenCalled();
-    expect(deviceState.lastVacuum).toBe(0.8);
+
+    expect(mockDevice.constrict).toHaveBeenCalledWith(0.8);
+    // setVacuum does not update deviceState; that is updateState's responsibility
+  });
+
+  // ── Session replacement / cancellation ───────────────────────────────────
+
+  it("should abort the previous session signal when a new session starts", () => {
+    const signal1 = startNewSession();
+    expect(signal1.aborted).toBe(false);
+
+    const signal2 = startNewSession();
+    expect(signal1.aborted).toBe(true);  // old session cancelled
+    expect(signal2.aborted).toBe(false); // new session active
+  });
+
+  it("should return distinct signals for each new session", () => {
+    const signal1 = startNewSession();
+    const signal2 = startNewSession();
+    expect(signal1).not.toBe(signal2);
+  });
+
+  it("should allow chaining multiple session replacements", () => {
+    const s1 = startNewSession();
+    const s2 = startNewSession();
+    const s3 = startNewSession();
+
+    expect(s1.aborted).toBe(true);
+    expect(s2.aborted).toBe(true);
+    expect(s3.aborted).toBe(false);
   });
 });

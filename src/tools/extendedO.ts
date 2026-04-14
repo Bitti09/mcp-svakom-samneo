@@ -109,8 +109,11 @@ export function createExtendedOTools(
           vacuumKeyframes.push({ duration: restoreDuration, value: enforceVacuum(targetVacuum), easing: "easeInOut" });
         }
 
-        // Fire the pattern through the engine
-        await engine.play(device.index, [
+        const totalDuration = holdDuration + restoreDuration;
+
+        // Fire the pattern through the engine.
+        // timeout auto-stops after the full hold+restore duration.
+        const id = await engine.play(device.index, [
           {
             featureIndex: 0,
             outputType: "Vibrate",
@@ -121,7 +124,17 @@ export function createExtendedOTools(
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }
-        ]);
+        ], {
+          timeout: totalDuration,
+          onStop: (_, reason) => {
+            if (!signal.aborted) {
+              void stopAll(device);
+              debugLog("ExtendedO", `Sequence stopped (reason: ${reason}).`);
+            }
+          },
+        });
+
+        debugLog("ExtendedO", `Pattern id=${id} started, timeout=${totalDuration}ms.`);
 
         return {
           content: [
@@ -133,6 +146,7 @@ export function createExtendedOTools(
         };
       } catch (e) {
         errorLog("ExtendedO", "Failed to activate Extended O:", e);
+        void stopAll(device); // safety: ensure device is zeroed on error
         return {
           content: [
             {

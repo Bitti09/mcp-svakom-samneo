@@ -132,7 +132,8 @@ export function createComboTools(
           }
         }
 
-        // Play the multi-track pattern simultaneously
+        // Play the multi-track pattern simultaneously.
+        // timeout auto-stops after duration; onStop zeroes the device.
         const id = await engine.play(device.index, [
           {
             featureIndex: 0,
@@ -144,16 +145,17 @@ export function createComboTools(
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
           }
-        ]);
+        ], {
+          timeout: duration,
+          onStop: (_, reason) => {
+            if (!signal.aborted) {
+              void stopAll(device);
+              debugLog("ComboTool", `Sequence stopped (reason: ${reason}).`);
+            }
+          },
+        });
 
-        // Stop the engine pattern after duration
-        setTimeout(() => {
-          if (!signal.aborted) {
-            engine.stop(id);
-            stopAll(device); // Reset levels to 0
-            debugLog("ComboTool", "Sequence completed.");
-          }
-        }, duration);
+        debugLog("ComboTool", `Pattern id=${id} started.`);
 
         return {
           content: [
@@ -165,6 +167,7 @@ export function createComboTools(
         };
       } catch (e) {
         errorLog("ComboTool", "Failed to start combo:", e);
+        void stopAll(device); // safety: ensure device is zeroed on error
         return {
           content: [
             {

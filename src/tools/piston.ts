@@ -92,23 +92,25 @@ export function createPistonTools(
           });
         }
 
-        // Fire the pattern through the engine
+        // Fire the pattern through the engine.
+        // timeout auto-stops after duration; onStop zeroes the device.
         const id = await engine.play(device.index, [
           {
             featureIndex: 0,
             outputType: "Vibrate",
             keyframes: keyframes,
           }
-        ]);
+        ], {
+          timeout: duration,
+          onStop: (_, reason) => {
+            if (!signal.aborted) {
+              void stopAll(device);
+              debugLog("PistonTool", `Sequence stopped (reason: ${reason}).`);
+            }
+          },
+        });
 
-        // Stop the engine pattern after duration
-        setTimeout(() => {
-          if (!signal.aborted) {
-            engine.stop(id);
-            stopAll(device); // Reset levels to 0
-            debugLog("PistonTool", "Sequence completed.");
-          }
-        }, duration);
+        debugLog("PistonTool", `Pattern id=${id} started.`);
 
         return {
           content: [
@@ -120,6 +122,7 @@ export function createPistonTools(
         };
       } catch (e) {
         errorLog("PistonTool", "Failed to start piston motion:", e);
+        void stopAll(device); // safety: ensure device is zeroed on error
         return {
           content: [
             {

@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type Device, type Keyframe } from "@zendrex/buttplug.js";
+import { type Device } from "@zendrex/buttplug.js";
 import {
   SamNeoVersion,
   deviceState,
   stopAll,
+  setVibration,
   updateState,
   startNewSession,
   getStateSummary,
@@ -77,47 +78,54 @@ export function createVacuumTools(
       const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
 
       try {
-        const keyframes: Keyframe[] = [];
+        // Silence vibration for this exclusive vacuum session
+        await setVibration(device, deviceVersion, 0);
 
-        if (pattern === "constant") {
-          keyframes.push({ duration: duration, value: safeIntensity });
-        } else if (pattern === "pulse") {
-          // Sharp on/off transitions
-          keyframes.push({ duration: pulseInterval, value: safeIntensity, easing: "step" });
-          keyframes.push({ duration: pulseInterval, value: 0, easing: "step" });
+        const onStop = (_id: string, reason: string) => {
+          if (!signal.aborted) {
+            void stopAll(device);
+            debugLog("VacuumTool", `Sequence stopped (reason: ${reason}).`);
+          }
+        };
+
+        let id: string;
+
+        if (pattern === "pulse") {
+          // Built-in pulse preset: square-wave on/off.
+          // speed = 500 / pulseInterval maps the default 1 s cycle to the requested interval.
+          id = await engine.play(device.index, "pulse", {
+            featureIndex: vacuumFeatureIndex,
+            intensity: safeIntensity,
+            speed: 500 / pulseInterval,
+            loop: true,
+            timeout: duration,
+            onStop,
+          });
         } else if (pattern === "wave") {
-          // Smooth sweeping interpolation
-          keyframes.push({ duration: duration / 2, value: safeIntensity, easing: "easeInOut" });
-          keyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
+          // Built-in wave preset: smooth sine-wave oscillation.
+          id = await engine.play(device.index, "wave", {
+            featureIndex: vacuumFeatureIndex,
+            intensity: safeIntensity,
+            loop: true,
+            timeout: duration,
+            onStop,
+          });
+        } else {
+          // constant: single keyframe that holds the level for the full duration.
+          id = await engine.play(
+            device.index,
+            [
+              {
+                featureIndex: vacuumFeatureIndex,
+                outputType: vacuumOutputType,
+                keyframes: [{ duration: duration, value: safeIntensity }],
+              },
+            ],
+            { timeout: duration, onStop },
+          );
         }
 
-        // Fire the pattern through the engine
-        const id = await engine.play(
-          device.index,
-          [
-            {
-              featureIndex: vacuumFeatureIndex,
-              outputType: vacuumOutputType,
-              keyframes: keyframes,
-            },
-            // Explicitly map vibration track to 0 to silence it during exclusive vacuum session
-            {
-              featureIndex: 0,
-              outputType: "Vibrate",
-              keyframes: [{ duration: duration, value: 0 }],
-            }
-          ],
-          { loop: pattern !== "constant" }
-        );
-
-        // Stop the engine pattern after duration
-        setTimeout(() => {
-          if (!signal.aborted) {
-            engine.stop(id);
-            stopAll(device); // Reset levels to 0
-            debugLog("VacuumTool", "Sequence completed.");
-          }
-        }, duration);
+        debugLog("VacuumTool", `Pattern id=${id} started.`);
 
         return {
           content: [
