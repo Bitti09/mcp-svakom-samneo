@@ -18,6 +18,7 @@ import { createPistonTools } from "./tools/piston.js";
 import { createVacuumTools } from "./tools/vacuum.js";
 import { createComboTools } from "./tools/combo.js";
 import { createExtendedOTools } from "./tools/extendedO.js";
+import { createCustomPatternTools } from "./tools/customPattern.js";
 import { createInfoTools } from "./tools/info.js";
 
 import { CONFIG } from "./utils/config.js";
@@ -126,6 +127,7 @@ async function main() {
     createVacuumTools(server, device, deviceVersion);
     createComboTools(server, device, deviceVersion);
     createExtendedOTools(server, device, deviceVersion);
+    createCustomPatternTools(server, device, deviceVersion);
     createInfoTools(server, device, deviceVersion);
 
     debugLog("Main", `✅ Connected: ${device.displayName ?? device.name} (${deviceVersion})`);
