@@ -13,6 +13,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getComboPattern } from "./customPatterns.js";
 
 /**
  * Registers the Combo tool with the MCP server.
@@ -60,6 +61,12 @@ export function createComboTools(
         .enum(["constant", "pulse", "wave"])
         .default("constant")
         .describe("Vacuum pattern for independent mode."),
+      patternName: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a previously imported custom combo pattern. When provided, overrides the built-in vibration/vacuum keyframes.",
+        ),
     },
 
     async ({
@@ -69,6 +76,7 @@ export function createComboTools(
       vacuumIntensity,
       syncMode,
       vacuumPattern,
+      patternName,
     }) => {
       debugLog(
         "ComboTool",
@@ -93,42 +101,64 @@ export function createComboTools(
       const vacuumFeatureIndex = isNeo2 ? 0 : 1;
       const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
 
+      // Use a custom pattern if requested
+      const customPattern = patternName ? getComboPattern(patternName) : undefined;
+      if (patternName && !customPattern) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Custom combo pattern "${patternName}" not found. Import it first with Svakom-Sam-Neo-ImportPattern.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       try {
-        const vibrationKeyframes: Keyframe[] = [];
-        const vacuumKeyframes: Keyframe[] = [];
+        let vibrationKeyframes: Keyframe[];
+        let vacuumKeyframes: Keyframe[];
 
-        if (syncMode === "synchronized") {
-          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
-          vacuumKeyframes.push({ duration: 0, value: enforceVacuum(0.1) });
+        if (customPattern) {
+          vibrationKeyframes = customPattern.vibrationKeyframes;
+          vacuumKeyframes = customPattern.vacuumKeyframes;
+        } else {
+          vibrationKeyframes = [];
+          vacuumKeyframes = [];
 
-          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
-          vacuumKeyframes.push({ duration: duration, value: safeVac, easing: "linear" });
-          
-        } else if (syncMode === "alternating") {
-          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
-          vacuumKeyframes.push({ duration: 0, value: safeVac });
+          if (syncMode === "synchronized") {
+            vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+            vacuumKeyframes.push({ duration: 0, value: enforceVacuum(0.1) });
 
-          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
-          vacuumKeyframes.push({ duration: duration, value: 0, easing: "linear" });
+            vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+            vacuumKeyframes.push({ duration: duration, value: safeVac, easing: "linear" });
 
-        } else if (syncMode === "independent") {
-          // Vibration ramps up
-          vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
-          vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+          } else if (syncMode === "alternating") {
+            vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+            vacuumKeyframes.push({ duration: 0, value: safeVac });
 
-          // Vacuum follows its independent pattern logic
-          if (vacuumPattern === "constant") {
-            vacuumKeyframes.push({ duration: duration, value: safeVac });
-          } else if (vacuumPattern === "pulse") {
-            const pInterval = 500;
-            const cycles = Math.floor(duration / (pInterval * 2));
-            for (let i = 0; i < cycles; i++) {
-              vacuumKeyframes.push({ duration: pInterval, value: safeVac, easing: "step" });
-              vacuumKeyframes.push({ duration: pInterval, value: 0, easing: "step" });
+            vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+            vacuumKeyframes.push({ duration: duration, value: 0, easing: "linear" });
+
+          } else if (syncMode === "independent") {
+            // Vibration ramps up
+            vibrationKeyframes.push({ duration: 0, value: enforceVibration(0.1) });
+            vibrationKeyframes.push({ duration: duration, value: safeVib, easing: "linear" });
+
+            // Vacuum follows its independent pattern logic
+            if (vacuumPattern === "constant") {
+              vacuumKeyframes.push({ duration: duration, value: safeVac });
+            } else if (vacuumPattern === "pulse") {
+              const pInterval = 500;
+              const cycles = Math.floor(duration / (pInterval * 2));
+              for (let i = 0; i < cycles; i++) {
+                vacuumKeyframes.push({ duration: pInterval, value: safeVac, easing: "step" });
+                vacuumKeyframes.push({ duration: pInterval, value: 0, easing: "step" });
+              }
+            } else if (vacuumPattern === "wave") {
+              vacuumKeyframes.push({ duration: duration / 2, value: safeVac, easing: "easeInOut" });
+              vacuumKeyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
             }
-          } else if (vacuumPattern === "wave") {
-            vacuumKeyframes.push({ duration: duration / 2, value: safeVac, easing: "easeInOut" });
-            vacuumKeyframes.push({ duration: duration / 2, value: 0, easing: "easeInOut" });
           }
         }
 
@@ -143,7 +173,7 @@ export function createComboTools(
             featureIndex: vacuumFeatureIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
-          }
+          },
         ]);
 
         // Stop the engine pattern after duration
@@ -159,7 +189,16 @@ export function createComboTools(
           content: [
             {
               type: "text",
-              text: `Started pattern engine combination sequence (${syncMode}, ${duration}ms). ${getStateSummary()}`,
+              text: JSON.stringify(
+                {
+                  patternType: "combo",
+                  status: `Started combination sequence (${patternName ? `custom:${patternName}` : syncMode}, ${duration}ms).`,
+                  customPattern: patternName ?? null,
+                  state: getStateSummary(),
+                },
+                null,
+                2,
+              ),
             },
           ],
         };

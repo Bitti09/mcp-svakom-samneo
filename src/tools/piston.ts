@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type Device } from "@zendrex/buttplug.js";
+import { type Device, type Keyframe } from "@zendrex/buttplug.js";
 import {
   type SamNeoVersion,
   deviceState,
@@ -13,7 +13,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
-import { type Keyframe } from "@zendrex/buttplug.js";
+import { getPistonPattern } from "./customPatterns.js";
 
 /**
  * Registers the Piston-like motion tool with the MCP server.
@@ -49,9 +49,15 @@ export function createPistonTools(
         .max(1)
         .default(0.5)
         .describe("Base vibration intensity (0.0 to 1.0)."),
+      patternName: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a previously imported custom piston pattern. When provided, overrides the built-in ramp keyframes.",
+        ),
     },
 
-    async ({ duration, steps, vibrationPower }) => {
+    async ({ duration, steps, vibrationPower, patternName }) => {
       debugLog(
         "PistonTool",
         `Starting piston motion: duration=${duration}ms, steps=${steps}, power=${vibrationPower}`,
@@ -71,25 +77,45 @@ export function createPistonTools(
       const delay = duration / steps;
 
       try {
-        // Construct the keyframes
-        const keyframes: Keyframe[] = [];
-        
-        // SYNC STEP: Trigger the motor IMMEDIATELY with a small prime
-        keyframes.push({ duration: 0, value: enforceVibration(0.1) });
+        let keyframes: Keyframe[];
 
-        for (let i = 1; i < steps; i++) {
-          const intensity = diff * i;
-          const actualIntensity =
-            deviceVersion === "original"
-              ? vibrationPower // Keep base power steady on one vibrator
-              : intensity * vibrationPower; // Ramp up on Neo 2
-              
-          keyframes.push({
-            duration: delay,
-            value: enforceVibration(actualIntensity),
-            // Defaulting to linear easing for smooth thrusting interpolation
-            easing: "linear",
-          });
+        // Use a custom pattern if one is requested by name
+        const customPattern = patternName ? getPistonPattern(patternName) : undefined;
+        if (patternName && !customPattern) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: Custom piston pattern "${patternName}" not found. Import it first with Svakom-Sam-Neo-ImportPattern.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (customPattern) {
+          keyframes = customPattern.keyframes;
+        } else {
+          // Build the default ramp keyframes
+          keyframes = [];
+
+          // SYNC STEP: Trigger the motor IMMEDIATELY with a small prime
+          keyframes.push({ duration: 0, value: enforceVibration(0.1) });
+
+          for (let i = 1; i < steps; i++) {
+            const intensity = diff * i;
+            const actualIntensity =
+              deviceVersion === "original"
+                ? vibrationPower // Keep base power steady on one vibrator
+                : intensity * vibrationPower; // Ramp up on Neo 2
+
+            keyframes.push({
+              duration: delay,
+              value: enforceVibration(actualIntensity),
+              // Defaulting to linear easing for smooth thrusting interpolation
+              easing: "linear",
+            });
+          }
         }
 
         // Fire the pattern through the engine
@@ -98,7 +124,7 @@ export function createPistonTools(
             featureIndex: 0,
             outputType: "Vibrate",
             keyframes: keyframes,
-          }
+          },
         ]);
 
         // Stop the engine pattern after duration
@@ -114,7 +140,16 @@ export function createPistonTools(
           content: [
             {
               type: "text",
-              text: `Started pattern engine piston motion sequence (${duration}ms). ${getStateSummary()}`,
+              text: JSON.stringify(
+                {
+                  patternType: "piston",
+                  status: `Started piston motion sequence (${duration}ms).`,
+                  customPattern: patternName ?? null,
+                  state: getStateSummary(),
+                },
+                null,
+                2,
+              ),
             },
           ],
         };

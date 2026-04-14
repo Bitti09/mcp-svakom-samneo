@@ -13,6 +13,7 @@ import { debugLog, errorLog } from "../utils/logger.js";
 import { enforceVibration, enforceVacuum, validateTransition } from "./enforcer.js";
 import { CONFIG } from "../utils/config.js";
 import { engine } from "../index.js";
+import { getExtendedOPattern } from "./customPatterns.js";
 
 /**
  * Registers the Extended O tool with the MCP server.
@@ -59,6 +60,12 @@ export function createExtendedOTools(
         .max(0.3)
         .default(0.1)
         .describe("Low intensity level to drop to."),
+      patternName: z
+        .string()
+        .optional()
+        .describe(
+          "Name of a previously imported custom extendedO pattern. When provided, overrides the built-in hold/restore keyframes.",
+        ),
     },
 
     async ({
@@ -67,6 +74,7 @@ export function createExtendedOTools(
       holdDuration,
       restoreDuration,
       minimumLevel,
+      patternName,
     }) => {
       debugLog(
         "ExtendedO",
@@ -91,26 +99,53 @@ export function createExtendedOTools(
       const vacuumFeatureIndex = isNeo2 ? 0 : 1;
       const vacuumOutputType = isNeo2 ? "Constrict" : "Vibrate";
 
+      // Use a custom pattern if requested
+      const customPattern = patternName ? getExtendedOPattern(patternName) : undefined;
+      if (patternName && !customPattern) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Custom extendedO pattern "${patternName}" not found. Import it first with Svakom-Sam-Neo-ImportPattern.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       try {
-        const vibrationKeyframes: Keyframe[] = [];
-        const vacuumKeyframes: Keyframe[] = [];
+        let vibrationKeyframes: Keyframe[];
+        let vacuumKeyframes: Keyframe[];
 
-        // 1. Immediately drop to minimum Level
-        vibrationKeyframes.push({ duration: 0, value: enforceVibration(minimumLevel) });
-        vacuumKeyframes.push({ duration: 0, value: enforceVacuum(minimumLevel) });
+        if (customPattern) {
+          vibrationKeyframes = customPattern.vibrationKeyframes;
+          vacuumKeyframes = customPattern.vacuumKeyframes;
+        } else {
+          vibrationKeyframes = [];
+          vacuumKeyframes = [];
 
-        // 2. Hold at minimum level
-        vibrationKeyframes.push({ duration: holdDuration, value: enforceVibration(minimumLevel) });
-        vacuumKeyframes.push({ duration: holdDuration, value: enforceVacuum(minimumLevel) });
+          // 1. Immediately drop to minimum Level
+          vibrationKeyframes.push({ duration: 0, value: enforceVibration(minimumLevel) });
+          vacuumKeyframes.push({ duration: 0, value: enforceVacuum(minimumLevel) });
 
-        // 3. Restore to target level
-        if (restoreDuration > 0) {
-          vibrationKeyframes.push({ duration: restoreDuration, value: enforceVibration(targetVibrate), easing: "easeInOut" });
-          vacuumKeyframes.push({ duration: restoreDuration, value: enforceVacuum(targetVacuum), easing: "easeInOut" });
+          // 2. Hold at minimum level
+          vibrationKeyframes.push({ duration: holdDuration, value: enforceVibration(minimumLevel) });
+          vacuumKeyframes.push({ duration: holdDuration, value: enforceVacuum(minimumLevel) });
+
+          // 3. Restore to target level
+          if (restoreDuration > 0) {
+            vibrationKeyframes.push({ duration: restoreDuration, value: enforceVibration(targetVibrate), easing: "easeInOut" });
+            vacuumKeyframes.push({ duration: restoreDuration, value: enforceVacuum(targetVacuum), easing: "easeInOut" });
+          }
         }
 
-        // Fire the pattern through the engine
-        await engine.play(device.index, [
+        // Total duration: keyframe durations sum
+        const totalDuration = customPattern
+          ? vibrationKeyframes.reduce((acc, kf) => acc + kf.duration, 0)
+          : holdDuration + restoreDuration;
+
+        // Fire the pattern through the engine and capture the id for explicit stop
+        const id = await engine.play(device.index, [
           {
             featureIndex: 0,
             outputType: "Vibrate",
@@ -120,14 +155,32 @@ export function createExtendedOTools(
             featureIndex: vacuumFeatureIndex,
             outputType: vacuumOutputType,
             keyframes: vacuumKeyframes,
-          }
+          },
         ]);
+
+        // Stop the engine pattern after total duration
+        setTimeout(() => {
+          if (!signal.aborted) {
+            engine.stop(id);
+            stopAll(device); // Reset levels to 0
+            debugLog("ExtendedO", "Sequence completed.");
+          }
+        }, totalDuration);
 
         return {
           content: [
             {
               type: "text",
-              text: `Started pattern engine Extended O climax control sequence (${holdDuration}ms hold). ${getStateSummary()}`,
+              text: JSON.stringify(
+                {
+                  patternType: "extendedO",
+                  status: `Started Extended O climax control sequence (${holdDuration}ms hold, ${restoreDuration}ms restore).`,
+                  customPattern: patternName ?? null,
+                  state: getStateSummary(),
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
